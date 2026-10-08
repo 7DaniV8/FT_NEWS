@@ -1,0 +1,10 @@
+# Versiones EXACTAS, las mismas con las que se probó todo (21/09/2026).
+# Sin tope, una actualización puede cambiar el comportamiento sin que
+# nadie toque el código: en RankingFTR, el límite global de slowapi dejó
+# de aplicarse a las rutas de los routers con una FastAPI más nueva.
+# Para actualizar: cambiar acá, correr tests/correr_todo.sh, desplegar.
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1
+pydantic>=2.0
+openpyxl>=3.1.2
