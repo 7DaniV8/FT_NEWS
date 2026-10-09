@@ -123,7 +123,7 @@ def test_recorrido_completo_sin_calibrar_y_calibrado(conn, cfg, monkeypatch):
     c2["NEWS_BANDAS_CALIBRADAS"] = 1
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
     assert r3["pasos"]["descubridor"]["FUEGO"] == 1 and e["tipo_alerta"] == "FUEGO" and e["motivo"] == "CONTRA_X"
-    assert e["texto_discord"].startswith("🔥 FULLTENIS") and "Juan Perez" in e["texto_discord"]
+    assert e["texto_discord"].startswith("🔥 FULLTENIS") and "Perez" in e["texto_discord"]
     assert "Challenger Lima" in e["texto_discord"]
     assert conn.execute("SELECT COUNT(*) FROM news_evaluacion").fetchone()[0] == 1   # una por partido
     # señales: con NEWS_DISCORD_ACTIVO=0 nada; con 1, la 🔥

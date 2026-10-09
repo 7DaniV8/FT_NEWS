@@ -156,7 +156,7 @@ def test_textos_sin_prohibidos(cfg_calibrado):
                      {"nombre": "Jugador X"}, {"nombre": "Jugador Y"}, evs)
     assert t["texto"].startswith("🔥 FULLTENIS")
     assert not textos.hay_prohibido(t["texto"]) and not textos.hay_prohibido(t["voz"])
-    assert "no es una recomendación" in t["texto"]
+    assert "📊 ANÁLISIS:" in t["texto"] and "Posible valor en" in t["texto"] and "📰 Fuente:" in t["texto"]  # 08/10 noche: formato nuevo; el pie lo pone FT Discord
     assert textos.hay_prohibido("tiene 62% de probabilidad")
     # sin calibrar, el texto no habla del mercado
     r2 = run(cfg_calibrado.__class__(cfg_calibrado, NEWS_BANDAS_CALIBRADAS=0), eventos_x=evs)
