@@ -282,3 +282,31 @@ def test_api_revision_interesante_excel(conn, cfg, monkeypatch):
         assert x.status_code == 200 and x.content[:2] == b"PK" and "xlsx" in x.headers["content-disposition"]
         hoy = t.get("/news/hoy", headers=h).json()
         assert "era_interesante" in (hoy["evaluaciones"][0] if hoy["evaluaciones"] else {"era_interesante": None})
+
+
+def test_dashboard_discord(conn, cfg, monkeypatch):
+    """Dashboard: solo las 🔥 dichas; el pick es el lado de la noticia."""
+    from ft_news import dashboard
+    c = _sin_proveedores(conn, cfg)
+    tareas.ciclo(conn, cliente=FTR([_h(1, "Juan Perez", "X Uno", "6-4 3-6 7-5"), _h(2, "Juan Perez", "X Dos", "7-6 6-7 6-3"),
+                                     _h(3, "Juan Perez", "X Tres", "6-2 4-6 6-4"), _h(4, "Juan Perez", "X Cuatro", "6-1 6-1")]), cfg=c, ahora=HOY)
+    e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
+    assert e["tipo_alerta"] == "FUEGO" and e["direccion_neta"] == "NEGATIVA"
+    assert dashboard.armar(conn)["kpis"]["total"] == 0                      # todavía no se dijo
+    conn.execute("UPDATE news_evaluacion SET dicho_discord=1, dicho_en=? WHERE id=?", (HOY.isoformat(), e["id"])); conn.commit()
+    d = dashboard.armar(conn)
+    assert d["kpis"]["total"] == 1 and d["kpis"]["pendientes"] == 1
+    assert d["historial"][0]["seleccion"] == "Luca Rossi" and d["historial"][0]["cuota"] == 2.90   # contra Perez → el rival
+    # Rossi gana → ganado, +1.90 u
+    conn.execute("INSERT INTO news_resultado (evaluacion_id, ganador_id, retiro, score, cerrado_en) VALUES (?,?,0,'6-4 6-4',?)",
+                 (e["id"], e["rival_id"], HOY.isoformat())); conn.commit()
+    d = dashboard.armar(conn)
+    k = d["kpis"]
+    assert k["ganadas"] == 1 and k["unidades"] == 1.9 and k["hit_rate"] == 100.0 and k["roi"] == 190.0
+    assert d["historial"][0]["unidades"] == 1.9 and "negativa para Juan Perez" in d["historial"][0]["detalle"]
+    assert dashboard.armar(conn, genero="F")["kpis"]["total"] == 0
+    monkeypatch.setattr(config, "NEWS_SECRET", "secreto-pruebas")
+    monkeypatch.setattr("ft_news.config.DB_PATH", __import__("pathlib").Path(conn.execute("PRAGMA database_list").fetchone()[2]))
+    with TestClient(app) as t:
+        r = t.get("/news/dashboard", headers={"X-FT-News-Secret": "secreto-pruebas"}).json()
+        assert r["kpis"]["ganadas"] == 1 and r["vista"] == "discord"

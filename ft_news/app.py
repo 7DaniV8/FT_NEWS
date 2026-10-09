@@ -208,6 +208,13 @@ def evaluacion_interesante(eid: int, body: InteresanteIn, conn=Depends(_conn)):
     return {"ok": True}
 
 
+@app.get("/news/dashboard", dependencies=[Depends(_auth)])
+def dashboard_get(conn=Depends(_conn), genero: str = "", valor_unidad: float = 1.0, limite: int = 500):
+    """Dashboard de ganadas/perdidas de las 🔥 dichas en Discord (ver dashboard.py)."""
+    from ft_news import dashboard
+    return dashboard.armar(conn, genero, valor_unidad, limite)
+
+
 @app.get("/news/excel", dependencies=[Depends(_auth)])
 def excel_get(conn=Depends(_conn)):
     from fastapi.responses import Response
