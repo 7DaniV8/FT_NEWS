@@ -15,6 +15,7 @@ Lo que se le pide (en español, con el fragmento original en su idioma):
 from __future__ import annotations
 
 import json
+import re
 import os
 from typing import Optional
 
@@ -31,8 +32,14 @@ URL_MODELOS = BASE + "/models"
 # seguidos con "gemini-2.5-flash 404"), se pregunta a la API qué modelos
 # tiene la clave y se elige el primero de esta lista que exista y soporte
 # generateContent. Se anota en el estado para que se vea en la pestaña.
-PREFERIDOS = ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite",
-              "gemini-flash-latest", "gemini-1.5-flash")
+PREFERIDOS = ("gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite",
+              "gemini-2.0-flash-lite", "gemini-flash-lite-latest", "gemini-1.5-flash")
+# 10/10/2026: "models/gemini-2.5-flash-lite is no longer available to new users.
+# Please update your code to use models/…": un modelo puede estar en la lista
+# de la clave y aun así dar 404. Se prueban varios en la misma llamada, se
+# recuerdan los que fallaron y se usa el que el propio mensaje sugiere.
+MAX_MODELOS_POR_LLAMADA = 4
+_SUGERIDO = re.compile(r"use\s+models/([A-Za-z0-9.\-]+)")
 # Precios de lista (US$ por 1k tokens) para la estimación.
 USD_ENTRADA_1K, USD_SALIDA_1K = 0.0003, 0.0025
 
@@ -80,6 +87,7 @@ class Gemini:
         self.nombre = "gemini"
         self.modelos_disponibles: Optional[list] = None   # se llena si hubo que buscar otro modelo
         self.aviso: Optional[str] = None                  # "modelo X no disponible: se usa Y"
+        self.modelos_malos: set = set()                   # los que dieron 404 con esta clave
 
     def _cabeceras(self) -> dict:
         # La clave va en cabecera, NO en la URL: así no termina en los logs
@@ -100,16 +108,21 @@ class Gemini:
                 out.append(nombre)
         return out
 
-    def elegir_modelo(self) -> Optional[str]:
-        """Ante un 404 del modelo configurado: el primero de PREFERIDOS que la
-        clave tenga; si ninguno, el primer 'flash' que haya; si nada, None."""
-        self.modelos_disponibles = self.listar_modelos()
+    def elegir_modelo(self, sugerido: Optional[str] = None) -> Optional[str]:
+        """Ante un 404 del modelo actual: el que sugiere el propio mensaje de
+        Google si existe; si no, el primero de PREFERIDOS que la clave tenga y
+        no haya fallado; si ninguno, el primer 'flash' que quede; si nada, None."""
+        if self.modelos_disponibles is None:
+            self.modelos_disponibles = self.listar_modelos()
         disp = set(self.modelos_disponibles)
+        malos = self.modelos_malos | {self.modelo}
+        if sugerido and sugerido not in malos and (sugerido in disp or not disp):
+            return sugerido
         for pref in PREFERIDOS:
-            if pref in disp and pref != self.modelo:
+            if pref in disp and pref not in malos:
                 return pref
         for n in self.modelos_disponibles:
-            if "flash" in n and n != self.modelo:
+            if "flash" in n and n not in malos:
                 return n
         return None
 
@@ -130,12 +143,16 @@ class Gemini:
         }
         self.llamadas += 1
         r = self._cli.post(URL.format(modelo=self.modelo), headers=self._cabeceras(), json=cuerpo)
-        if r.status_code == 404:
-            # El modelo no existe para esta clave / versión de API. Se busca
-            # otro UNA vez; si no hay, error fatal con la lista para la pestaña.
-            otro = None
+        intentos = 0
+        while r.status_code == 404 and intentos < MAX_MODELOS_POR_LLAMADA:
+            # El modelo no existe para esta clave / versión de API (o "ya no está
+            # disponible para nuevos usuarios"). Se recuerda, se busca otro y se
+            # reintenta en la misma llamada; si no queda ninguno, error fatal.
+            intentos += 1
+            self.modelos_malos.add(self.modelo)
+            m = _SUGERIDO.search(r.text or "")
             try:
-                otro = self.elegir_modelo()
+                otro = self.elegir_modelo(m.group(1) if m else None)
             except ErrorProveedor:
                 raise
             except Exception as e:                                   # pragma: no cover
@@ -143,13 +160,16 @@ class Gemini:
                                      f"modelos: {e}", pausa_seg=3600, fatal=True)
             if not otro:
                 disp = ", ".join((self.modelos_disponibles or [])[:12]) or "ninguno"
-                raise ErrorProveedor(f"Gemini: modelo '{self.modelo}' no disponible para esta clave (404) y ningún "
-                                     f"'flash' alternativo; modelos de la clave: {disp}. Revisar GEMINI_API_KEY "
-                                     f"(AI Studio) o GEMINI_MODELO.", pausa_seg=3600, fatal=True)
-            self.aviso = f"modelo '{self.modelo}' no disponible (404): se usa '{otro}'"
+                raise ErrorProveedor(f"Gemini: ningún modelo disponible para esta clave (404 en "
+                                     f"{', '.join(sorted(self.modelos_malos))}); modelos de la clave: {disp}. "
+                                     f"Revisar GEMINI_API_KEY (AI Studio) o GEMINI_MODELO.", pausa_seg=3600, fatal=True)
+            self.aviso = f"modelo {', '.join(sorted(self.modelos_malos))} no disponible (404): se usa '{otro}'"
             self.modelo = otro
             self.llamadas += 1
             r = self._cli.post(URL.format(modelo=self.modelo), headers=self._cabeceras(), json=cuerpo)
+        if r.status_code == 404:
+            raise ErrorProveedor(f"Gemini: {intentos} modelos seguidos con 404 ({', '.join(sorted(self.modelos_malos))}). "
+                                 f"Revisar GEMINI_API_KEY o pasar a Claude (NEWS_CLASIFICADOR=claude).", pausa_seg=3600, fatal=True)
         if r.status_code in (401, 403):
             raise ErrorProveedor(f"Gemini rechazó la clave ({r.status_code})", pausa_seg=3600, fatal=True)
         if r.status_code == 429:

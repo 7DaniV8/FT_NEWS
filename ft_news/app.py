@@ -303,6 +303,72 @@ def jugadores_buscar(conn=Depends(_conn), q: str = "", limite: int = 20):
     return {"jugadores": filas}
 
 
+@app.get("/news/evaluaciones/{eid}", dependencies=[Depends(_auth)])
+def evaluacion_detalle(eid: int, conn=Depends(_conn)):
+    """10/10/2026 (Rubén: "cuando seleccione un partido 🔥, ver qué noticias encontró
+    y todo lo que analizó"): la evaluación completa de un partido — noticias
+    usadas (fuente, enlace, titular, nivel, confirmación), todo lo vigente de los
+    dos (externo y calculado), lectura del descubridor, justificación de la 🔥,
+    cuotas observadas, investigación reciente y las alertas que salieron."""
+    import json as _json
+    from ft_news import partidos as _pt
+    e = conn.execute("SELECT * FROM news_evaluacion WHERE id=?", (eid,)).fetchone()
+    if not e:
+        raise HTTPException(status_code=404, detail="evaluación no encontrada")
+    e = dict(e)
+    p = conn.execute("SELECT * FROM news_partido WHERE id=?", (e["partido_id"],)).fetchone()
+    p = dict(p) if p else {}
+    js = {}
+    for k in ("jugador_x_id", "rival_id"):
+        j = conn.execute("SELECT id, nombre, pais, genero, circuito, utr_singles, utr_en, utr_display FROM news_jugador WHERE id=?",
+                         (e[k],)).fetchone()
+        js[k] = dict(j) if j else {"id": e[k], "nombre": "?"}
+    try:
+        usados_ids = [int(i) for i in _json.loads(e.get("eventos_json") or "[]") if i is not None]
+    except (TypeError, ValueError):
+        usados_ids = []
+
+    def _ev(r):
+        d = dict(r)
+        d["origen"] = d.get("origen") or ("EXTERNO" if d.get("articulo_id") else "INTERNO")
+        if d.get("articulo_id"):
+            a = conn.execute("SELECT titulo, url, dominio, fecha_publicacion, idioma, origen AS via FROM news_articulo WHERE id=?",
+                             (d["articulo_id"],)).fetchone()
+            d["articulo"] = dict(a) if a else None
+        d["cambios"] = memoria.historial_cambios(conn, d["id"])
+        for k in ("lectura1_json", "lectura2_json"):
+            d.pop(k, None)
+        return d
+    usados = [_ev(r) for r in conn.execute(
+        f"SELECT * FROM news_evento WHERE id IN ({','.join('?' * len(usados_ids)) or 'NULL'}) ORDER BY fecha_evento", usados_ids)] if usados_ids else []
+    vigentes = {}
+    for k in ("jugador_x_id", "rival_id"):
+        vigentes[k] = [_ev(r) for r in conn.execute(
+            "SELECT * FROM news_evento WHERE jugador_id=? AND estado IN ('VIGENTE','EN_SEGUIMIENTO') ORDER BY fecha_evento DESC LIMIT 20",
+            (e[k],))]
+    al = []
+    for a in alertas.listar(conn, 50):
+        if a.get("partido_id") == e["partido_id"]:
+            al.append(a)
+    horas = int(config.leer_config(conn).get("NEWS_RIVAL_HORAS", 48))
+    ahora = datetime.now(timezone.utc)
+    fres = {k: alertas.frescura(conn, e[k], ahora, horas) for k in ("jugador_x_id", "rival_id")}
+    busq = {k: [dict(r) for r in conn.execute(
+        "SELECT consulta, idioma, resultados, creado_en FROM news_busqueda WHERE jugador_id=? ORDER BY id DESC LIMIT 8", (e[k],))]
+        for k in ("jugador_x_id", "rival_id")}
+    arts = {k: [dict(r) for r in conn.execute(
+        "SELECT id, titulo, url, dominio, resultado, motivo, creado_en FROM news_articulo WHERE jugador_id=? ORDER BY id DESC LIMIT 12", (e[k],))]
+        for k in ("jugador_x_id", "rival_id")}
+    res = conn.execute("SELECT * FROM news_resultado WHERE evaluacion_id=?", (eid,)).fetchone()
+    return {"evaluacion": e, "partido": p, "jugador_x": js["jugador_x_id"], "rival": js["rival_id"],
+            "eventos_usados": usados, "vigentes_x": vigentes["jugador_x_id"], "vigentes_rival": vigentes["rival_id"],
+            "cuotas": _pt.observaciones(conn, e["partido_id"]) if e.get("partido_id") else [],
+            "alertas": al, "frescura": {"x": fres["jugador_x_id"], "rival": fres["rival_id"]},
+            "busquedas": {"x": busq["jugador_x_id"], "rival": busq["rival_id"]},
+            "articulos": {"x": arts["jugador_x_id"], "rival": arts["rival_id"]},
+            "resultado": dict(res) if res else None}
+
+
 @app.get("/news/jugadores/{jugador_id}/memoria", dependencies=[Depends(_auth)])
 def memoria_get(jugador_id: int, conn=Depends(_conn)):
     hist = memoria.historial_db(conn, jugador_id)

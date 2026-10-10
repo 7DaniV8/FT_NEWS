@@ -378,3 +378,34 @@ def test_sin_cuota_posterior_a_la_noticia_es_interesante_pendiente(conn, cfg):
     # el mismo precio visto de nuevo no duplica la observación: solo corre hasta_en
     obs = partidos.observaciones(conn, e["partido_id"])
     assert len(obs) == 1 and obs[0]["hasta_en"] == f2.cap and obs[0]["capturada_en"] == (HOY - timedelta(hours=3)).isoformat()
+
+
+def test_endpoint_evaluacion_detalle_para_el_modal(conn, cfg, monkeypatch):
+    """10/10/2026: el modal de la pestaña (🔥 → qué noticias encontró y todo lo analizado)."""
+    from ft_news import config
+    from fastapi.testclient import TestClient
+    from ft_news.app import app
+    c = _cfg(cfg)
+    gem, _ = _gem({"Juan Perez": _lesion("Juan Perez", nivel_nat="HECHO")})
+    tav, _ = _tav({"Juan Perez": [_art("https://tennistourtalk.com/perez-wrist", "Perez wrist", "Juan Perez felt pain")]})
+    _ciclo(conn, c, tav, gem)
+    e = _evaluacion(conn)
+    monkeypatch.setattr(config, "NEWS_SECRET", "secreto-pruebas")
+    monkeypatch.setattr("ft_news.config.DB_PATH", __import__("pathlib").Path(conn.execute("PRAGMA database_list").fetchone()[2]))
+    with TestClient(app) as t:
+        h = {"X-FT-News-Secret": "secreto-pruebas"}
+        d = t.get(f"/news/evaluaciones/{e['id']}", headers=h).json()
+        assert d["evaluacion"]["tipo_alerta"] == "FUEGO_EXPERIMENTAL" and d["partido"]["torneo"] == "Challenger Lima"
+        assert d["jugador_x"]["nombre"] == "Juan Perez" and d["rival"]["nombre"] == "Luca Rossi" and d["jugador_x"]["utr_singles"] == 12.9
+        ev = d["eventos_usados"]
+        assert len(ev) == 1 and ev[0]["origen"] == "EXTERNO" and ev[0]["articulo"]["url"] == "https://tennistourtalk.com/perez-wrist"
+        assert ev[0]["fuente"] == "tennistourtalk.com" and ev[0]["cambios"][0]["cambio"] == "NUEVO" and "lectura1_json" not in ev[0]
+        assert d["vigentes_x"] and d["vigentes_rival"] == []
+        assert d["cuotas"] and d["cuotas"][0]["proveedor"] == "FIXTURES_FTR"
+        tipos = {a["tipo"] for a in d["alertas"]}
+        assert "FUEGO_EXPERIMENTAL" in tipos
+        fe = [a for a in d["alertas"] if a["tipo"] == "FUEGO_EXPERIMENTAL"][0]
+        assert fe["evidencia"]["justificacion"]["puntos"] >= 2 and fe["texto_discord"].startswith("🔥 FULLTENNIS")
+        assert d["frescura"]["x"]["reciente"] and d["frescura"]["rival"]["reciente"]
+        assert d["busquedas"]["x"] and d["articulos"]["x"][0]["resultado"] == "EVENTO"
+        assert t.get("/news/evaluaciones/9999", headers=h).status_code == 404

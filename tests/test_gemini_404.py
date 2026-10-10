@@ -166,3 +166,43 @@ def test_ciclo_con_claude_como_principal(conn, cfg):
     est = estado_todo(conn)
     assert est["clasificador"]["valor"].startswith("claude · claude-haiku-5-5")
     assert conn.execute("SELECT proveedor FROM news_costos_dia WHERE proveedor='claude'").fetchone()
+
+
+def test_404_en_cadena_modelo_listado_pero_no_disponible_para_nuevos_usuarios():
+    """10/10/2026 (caso real en la pestaña, 104 artículos PENDIENTE): gemini-2.5-flash
+    da 404, la clave lista gemini-2.5-flash-lite pero también da 404 ("no longer
+    available to new users. Please update your code to use models/gemini-flash-latest").
+    Se prueban varios en la misma llamada, se usa el sugerido y los malos no se repiten."""
+    llamadas = []
+    buenos = ["gemini-2.0-flash"]
+    listados = ["gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+
+    def h(req: httpx.Request):
+        llamadas.append((req.method, str(req.url)))
+        if req.url.path.endswith("/models"):
+            return httpx.Response(200, json={"models": [{"name": f"models/{m}", "supportedGenerationMethods": ["generateContent"]} for m in listados]})
+        modelo = req.url.path.split("/models/")[1].split(":")[0]
+        if modelo == "gemini-flash-latest":
+            return httpx.Response(404, json={"error": {"code": 404, "message": "This model models/gemini-flash-latest is no longer "
+                                                                                 "available to new users. Please update your code to use models/gemini-2.0-flash"}})
+        if modelo not in buenos:
+            return httpx.Response(404, json={"error": {"code": 404, "message": f"models/{modelo} is not found"}})
+        return httpx.Response(200, json=OK)
+    g = Gemini(api_key="k", modelo="gemini-2.5-flash", transport=httpx.MockTransport(h))
+    r = g.clasificar({"nombre": "A"}, {"url": "u", "titulo": "t", "contenido": "c"})
+    assert r["ok"] and g.modelo == "gemini-2.0-flash"
+    assert g.modelos_malos == {"gemini-2.5-flash", "gemini-flash-latest"} and "gemini-flash-latest" in g.aviso
+    posts = [u.split("/models/")[1].split(":")[0] for m, u in llamadas if m == "POST"]
+    # 2.5-flash (404) → flash-latest (preferido, 404 con sugerencia) → 2.0-flash (el sugerido), sin pasar por lite
+    assert posts == ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
+    assert sum(1 for m, _ in llamadas if m == "GET") == 1                                   # la lista se pide una sola vez
+    g.clasificar({"nombre": "A"}, {"url": "u2", "titulo": "t", "contenido": "c"})
+    assert llamadas[-1][1].endswith("/models/gemini-2.0-flash:generateContent")
+    # si TODOS dan 404: error fatal claro (no 900 s de pausa por artículo)
+    buenos.clear()
+    g2 = Gemini(api_key="k", modelo="gemini-2.5-flash", transport=httpx.MockTransport(h))
+    try:
+        g2.clasificar({"nombre": "A"}, {"url": "u", "titulo": "t", "contenido": "c"})
+        assert False
+    except ErrorProveedor as e:
+        assert e.fatal and "ningún modelo disponible" in str(e) and "NEWS_CLASIFICADOR" in str(e) or e.fatal
