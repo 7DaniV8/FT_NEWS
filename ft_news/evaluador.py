@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from ft_news import descubridor, memoria, partidos, textos
+from ft_news import alertas, descubridor, memoria, partidos, textos
 from ft_news.db import ahora_iso, ejecutar_con_reintento
 
 
@@ -22,14 +22,18 @@ def _jugador(conn, jid: int) -> Optional[dict]:
     return dict(r) if r else None
 
 
+FUEGOS = ("FUEGO", "FUEGO_EXPERIMENTAL")
+
+
 def _fuego_hoy(conn, ahora: datetime) -> int:
-    return conn.execute("SELECT COUNT(*) FROM news_evaluacion WHERE tipo_alerta='FUEGO' AND creado_en >= ?",
-                        (ahora.date().isoformat(),)).fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM news_evaluacion WHERE tipo_alerta IN ('FUEGO','FUEGO_EXPERIMENTAL') "
+                        "AND creado_en >= ?", (ahora.date().isoformat(),)).fetchone()[0]
 
 
 def _ya_avisado(conn, jugador_id: int, torneo: Optional[str], partido_id: int) -> bool:
     return conn.execute(
-        "SELECT 1 FROM news_evaluacion e JOIN news_partido p ON p.id = e.partido_id WHERE e.tipo_alerta='FUEGO' "
+        "SELECT 1 FROM news_evaluacion e JOIN news_partido p ON p.id = e.partido_id "
+        "WHERE e.tipo_alerta IN ('FUEGO','FUEGO_EXPERIMENTAL') "
         "AND e.dicho_discord=1 AND e.jugador_x_id=? AND p.torneo=? AND e.partido_id<>?",
         (jugador_id, torneo, partido_id)).fetchone() is not None
 
@@ -74,22 +78,52 @@ def evaluar_partido(conn, cfg: dict, p: dict, ahora: datetime) -> Optional[dict]
         inicio_partido=p.get("fecha_estimada"), fuego_hoy=_fuego_hoy(conn, ahora),
         ya_avisado=_ya_avisado(conn, jx["id"], p.get("torneo"), p["id"]))
     r.update(utr_x=jx.get("utr_singles"), utr_rival=jr.get("utr_singles"), cuota_x=cuota_x, cuota_rival=cuota_r)
+    # v5.1: una 🔥 (experimental o validada) tiene que poder decir qué información
+    # podría no estar en la cuota, qué hay en contra y por qué merece la alerta;
+    # si no alcanza, queda como 🔎 (Rubén, 09/10 noche).
+    if r["tipo_alerta"] in FUEGOS:
+        try:
+            j = alertas.justificar(conn, cfg, r, p, jx, jr, ex, er, ahora)
+        except Exception as e:                       # pragma: no cover
+            j = {"suficiente": False, "motivo": f"error: {e}", "no_reflejado": [], "a_favor": [], "en_contra": [], "sin_fresca": []}
+        r["justificacion"] = j
+        if not j["suficiente"] and (r["tipo_alerta"] == "FUEGO_EXPERIMENTAL" or j.get("sin_fresca")):
+            if j.get("cuota_pendiente") and not j.get("sin_fresca") and j["motivo"] != "RETIRO_MISMO_TORNEO":
+                r["conclusion"] = (f"Noticia externa; 🔥 pendiente de actualización de cuota: falta {j['cuota_pendiente']}. "
+                                   f"Se reevalúa cuando llegue un precio confirmado después de la noticia.")
+            else:
+                r["conclusion"] = (f"Noticia externa, pero no alcanza para 🔥 ({j['motivo'].split(':')[0].replace('_', ' ').lower()})"
+                                   + (f": {'; '.join(j['en_contra'])}" if j.get("en_contra") else "") + ".")
+            r.update(tipo_alerta="INTERESANTE", motivo=j["motivo"].split(":")[0])
+            for n in j.get("sin_fresca") or []:
+                jid = jx["id"] if n == jx["nombre"] else jr["id"]
+                alertas.adelantar(conn, jid, ahora)
     usados = [e for e in ex + er if e.get("id") in (r.get("eventos_usados") or [])] or ex or er
     try:
-        t = textos.armar(r, p, {"nombre": jx["nombre"]}, {"nombre": jr["nombre"]}, usados)
+        t = textos.armar(r, p, jx, jr, usados)
     except ValueError as e:
         r.update(tipo_alerta="INTERESANTE", motivo="TEXTO_PROHIBIDO", conclusion=str(e))
         t = {"texto": "", "voz": ""}
-    _guardar(conn, p, jx, jr, r, t, usados, prev, ahora)
+    eid = _guardar(conn, p, jx, jr, r, t, usados, prev, ahora)
+    # v5: lo que va a Discord lo decide alertas.py (selección, dedupe, topes, motivo).
+    try:
+        if r["tipo_alerta"] in FUEGOS:
+            r["alerta"] = alertas.fuego(conn, cfg, r, p, jx, jr, usados, eid, t["texto"], t["voz"], ahora)
+        elif r["tipo_alerta"] == "INTERESANTE":
+            r["alerta"] = alertas.partido_interesante(conn, cfg, r, p, jx, jr, ex, er, eid, ahora)
+    except Exception as e:                           # la alerta nunca tumba la evaluación
+        r["alerta"] = {"alerta_id": None, "motivo": f"error: {e}"}
     return r
 
 
-def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> None:
+def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> Optional[int]:
     tipo = r["tipo_alerta"]
     dicho_motivo = None
-    if prev and prev["tipo_alerta"] == "FUEGO" and prev["dicho_discord"] and tipo != "FUEGO":
+    # Una 🔥 ya dicha no se degrada (validada → experimental tampoco); experimental → validada sí sube.
+    rango = {"FUEGO": 2, "FUEGO_EXPERIMENTAL": 1}
+    if prev and prev["tipo_alerta"] in FUEGOS and prev["dicho_discord"] == 1 and rango.get(tipo, 0) < rango[prev["tipo_alerta"]]:
         dicho_motivo = f"{tipo}:{r.get('motivo')}"
-        tipo, motivo = "FUEGO", prev["motivo"]
+        tipo, motivo = prev["tipo_alerta"], prev["motivo"]
     else:
         motivo = r.get("motivo")
     des = r.get("desvio") or {}
@@ -116,12 +150,13 @@ def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> None:
                 "version_motor, fixture_id, dicho_motivo, actualizado_en, creado_en) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals + (ahora_iso(),))
         conn.commit()
-    ejecutar_con_reintento(_w, conn=conn)
+        return prev["id"] if prev else conn.execute("SELECT id FROM news_evaluacion WHERE partido_id=?", (p["id"],)).fetchone()[0]
+    return ejecutar_con_reintento(_w, conn=conn)
 
 
 def correr(conn, cfg: dict, ahora: Optional[datetime] = None) -> dict:
     ahora = ahora or datetime.now(timezone.utc)
-    res = {"partidos": 0, "evaluados": 0, "FUEGO": 0, "INTERESANTE": 0, "NADA": 0}
+    res = {"partidos": 0, "evaluados": 0, "FUEGO": 0, "FUEGO_EXPERIMENTAL": 0, "INTERESANTE": 0, "NADA": 0, "alertas": 0}
     for p in partidos.proximos(conn, ahora, int(cfg.get("NEWS_VENTANA_PARTIDO_HORAS", 72))):
         res["partidos"] += 1
         r = evaluar_partido(conn, cfg, p, ahora)
@@ -129,33 +164,17 @@ def correr(conn, cfg: dict, ahora: Optional[datetime] = None) -> dict:
             continue
         res["evaluados"] += 1
         res[r["tipo_alerta"]] = res.get(r["tipo_alerta"], 0) + 1
+        if (r.get("alerta") or {}).get("alerta_id"):
+            res["alertas"] += 1
     return res
 
 
 def senales(conn, cfg: dict, limite: int = 50) -> list[dict]:
-    """Lo que viaja a FT Intelligence: 🔥 no dichas (y 🔎 si NEWS_DISCORD_INTERESANTE=1),
-    solo con bandas calibradas para las 🔥."""
-    tipos = ["FUEGO"]
-    if cfg.get("NEWS_DISCORD_INTERESANTE"):
-        tipos.append("INTERESANTE")
-    q = ("SELECT e.*, p.torneo, p.fecha_estimada, p.genero, p.circuito, jx.nombre AS jugador_x, jr.nombre AS rival "
-         "FROM news_evaluacion e JOIN news_partido p ON p.id=e.partido_id JOIN news_jugador jx ON jx.id=e.jugador_x_id "
-         "JOIN news_jugador jr ON jr.id=e.rival_id WHERE e.dicho_discord=0 AND e.tipo_alerta IN (%s) "
-         "AND (e.tipo_alerta<>'FUEGO' OR e.bandas_calibradas=1) AND e.texto_discord<>'' "
-         "ORDER BY e.id LIMIT ?" % ",".join("?" * len(tipos)))
-    return [dict(r) for r in conn.execute(q, (*tipos, limite)).fetchall()]
+    """Lo que viaja a FT Intelligence (v5): las alertas seleccionadas en
+    news_alerta (📰, 🔎, 🔥 validada, 🔥 experimental), no dichas."""
+    return alertas.pendientes(conn, cfg, limite)
 
 
 def marcar_dichas(conn, avisos: list[dict]) -> int:
-    ahora = ahora_iso()
-
-    def _w():
-        n = 0
-        for a in avisos:
-            n += conn.execute("UPDATE news_evaluacion SET dicho_discord=?, dicho_en=?, dicho_motivo=COALESCE(?, dicho_motivo) "
-                              "WHERE id=? AND dicho_discord=0",
-                              (1 if a.get("dicho") else 2, a.get("en") or ahora, a.get("motivo"), a.get("id"))).rowcount
-            # dicho_discord: 0 pendiente · 1 dicho · 2 omitido por FT Intelligence/Discord (motivo en dicho_motivo)
-        conn.commit()
-        return n
-    return ejecutar_con_reintento(_w, conn=conn)
+    """dicho_discord: 0 pendiente · 1 dicho · 2 omitido por FT Intelligence/Discord."""
+    return alertas.marcar_dichas(conn, avisos)

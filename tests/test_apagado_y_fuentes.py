@@ -132,7 +132,12 @@ def test_api(monkeypatch):
         h = {"X-FT-News-Secret": "secreto-pruebas"}
         e = t.get("/news/estado", headers=h).json()
         assert e["activo"] is True and e["bandas_calibradas"] is False and e["fuentes"]["autorizadas"] == 6
+        # v6: Discord nace encendido (Rubén 09/10 23:13: "activemos las tres alertas"); apagar es un clic
+        assert e["discord_activo"] is True
         assert t.get("/news/senales", headers=h).json() == {"senales": []}          # activo, sin señales todavía
+        t.post("/news/config", headers=h, json={"clave": "NEWS_DISCORD_ACTIVO", "valor": "0", "por": "t"})
+        assert t.get("/news/senales", headers=h).json() == {"senales": [], "motivo": "NEWS_DISCORD_ACTIVO=0"}
+        t.post("/news/config", headers=h, json={"clave": "NEWS_DISCORD_ACTIVO", "valor": "1", "por": "t"})
         r = t.post("/news/config", headers=h, json={"clave": "NEWS_MAX_FUEGO_DIA", "valor": "7", "por": "t"})
         assert r.json()["efectivo"] == 7
         assert t.post("/news/config", headers=h, json={"clave": "INVENTADA", "valor": "1"}).status_code == 400

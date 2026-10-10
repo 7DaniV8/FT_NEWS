@@ -168,7 +168,7 @@ def lectura_contextual(historial: list[dict], jugador_id: int, ahora: Optional[d
 _CAMPOS = ("jugador_id", "articulo_id", "categoria", "direccion", "naturaleza", "nivel", "fecha_evento",
            "fecha_publicacion", "fuente", "enlace", "fragmento_original", "resumen_es", "relevancia_deportiva",
            "confianza_identidad", "estado", "vigente_hasta", "superado_por", "verificar_estado_fisico",
-           "lectura1_json", "lectura2_json")
+           "lectura1_json", "lectura2_json", "origen", "titular")
 
 
 def _asegurar_columna(conn) -> None:
@@ -184,11 +184,32 @@ def historial_db(conn, jugador_id: int) -> list[dict]:
         "SELECT * FROM news_evento WHERE jugador_id=? ORDER BY fecha_evento, id", (jugador_id,)).fetchall()]
 
 
+def _origen_de(ev: dict) -> str:
+    if ev.get("origen") in ("EXTERNO", "INTERNO"):
+        return ev["origen"]
+    interno = str(ev.get("fuente") or "") == "rankingftr.interno" or str(ev.get("enlace") or "").startswith("contexto:")
+    return "INTERNO" if interno else "EXTERNO"
+
+
+def anotar_historial(conn, evento_id: int, cambio: str, detalle: str = "", por: str = "motor") -> None:
+    """v5 (Rubén §4: "historial de cambios y actualizaciones"): cada cambio
+    de estado de un evento queda escrito en news_evento_historial."""
+    conn.execute("INSERT INTO news_evento_historial (evento_id, cambio, detalle, por, creado_en) VALUES (?,?,?,?,?)",
+                 (evento_id, cambio, (detalle or "")[:500], por, ahora_iso()))
+
+
+def historial_cambios(conn, evento_id: int) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM news_evento_historial WHERE evento_id=? ORDER BY id",
+                                          (evento_id,)).fetchall()]
+
+
 def guardar_evento_db(conn, ev: dict) -> int:
     """Aplica las reglas contra el historial guardado y persiste todo."""
     _asegurar_columna(conn)
     hist = historial_db(conn, ev["jugador_id"])
+    antes = {e["id"]: (e["estado"], e.get("vigente_hasta")) for e in hist if e.get("id") is not None}
     aplicar_reglas(hist, ev)
+    ev["origen"] = _origen_de(ev)
     ahora = ahora_iso()
 
     def _w():
@@ -197,6 +218,8 @@ def guardar_evento_db(conn, ev: dict) -> int:
             f"VALUES ({', '.join('?' * len(_CAMPOS))}, ?, ?, ?)",
             tuple(_json(ev.get(c)) for c in _CAMPOS) + (int(ev.get("partidos_completos_desde") or 0), ahora, ahora))
         nuevo_id = cur.lastrowid
+        anotar_historial(conn, nuevo_id, "NUEVO", f"{ev['categoria']} {ev['nivel']} {ev['naturaleza']} estado {ev['estado']} "
+                         f"({ev['origen'].lower()}, {ev.get('fuente') or 'sin fuente'})")
         for e in hist:
             if e is ev or e.get("id") is None:
                 continue
@@ -205,11 +228,40 @@ def guardar_evento_db(conn, ev: dict) -> int:
                          "verificar_estado_fisico=?, partidos_completos_desde=?, actualizado_en=? WHERE id=?",
                          (e["estado"], e.get("vigente_hasta"), sup, int(e.get("verificar_estado_fisico") or 0),
                           int(e.get("partidos_completos_desde") or 0), ahora, e["id"]))
+            if antes.get(e["id"]) != (e["estado"], e.get("vigente_hasta")):
+                anotar_historial(conn, e["id"], e["estado"], f"por evento {nuevo_id} ({ev['categoria']})")
         conn.commit()
         return nuevo_id
     nuevo_id = ejecutar_con_reintento(_w, conn=conn)
     ev["id"] = nuevo_id
     return nuevo_id
+
+
+def vencer_db(conn, ahora: Optional[datetime] = None) -> dict:
+    """R5 persistida (v5): lo que venció queda VENCIDO en la base y en el
+    historial de cambios (antes solo se vencía en memoria al evaluar)."""
+    ahora = ahora or datetime.now(timezone.utc)
+    filas = conn.execute("SELECT id, vigente_hasta FROM news_evento WHERE estado IN ('VIGENTE','EN_SEGUIMIENTO') "
+                         "AND vigente_hasta IS NOT NULL AND vigente_hasta < ?", (_iso(ahora),)).fetchall()
+    n = 0
+    for f in filas:
+        if cambiar_estado_db(conn, f["id"], "VENCIDO", f"vigente hasta {str(f['vigente_hasta'])[:10]}"):
+            n += 1
+    return {"vencidos": n}
+
+
+def cambiar_estado_db(conn, evento_id: int, estado: str, detalle: str = "", por: str = "motor") -> bool:
+    """Cambio explícito (DESMENTIDO por revisión, VENCIDO por el cierre, VERIFICADO...)."""
+    r = conn.execute("SELECT estado FROM news_evento WHERE id=?", (evento_id,)).fetchone()
+    if not r or r["estado"] == estado:
+        return False
+
+    def _w():
+        conn.execute("UPDATE news_evento SET estado=?, actualizado_en=? WHERE id=?", (estado, ahora_iso(), evento_id))
+        anotar_historial(conn, evento_id, estado, detalle, por)
+        conn.commit()
+        return True
+    return ejecutar_con_reintento(_w, conn=conn)
 
 
 def _json(v):

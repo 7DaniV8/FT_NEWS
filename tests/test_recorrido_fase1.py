@@ -18,6 +18,7 @@ MANANA = (HOY + timedelta(hours=20)).isoformat()
 class ClienteFTR:
     llamadas = 0
     veredicto = "NO_CALIBRADAS"
+    cap = (HOY - timedelta(hours=3)).isoformat()      # hora de captura de la cuota (v5.2: se adelanta en el 2.º ciclo)
 
     def calibracion(self):
         self.llamadas += 1
@@ -35,8 +36,10 @@ class ClienteFTR:
 
     def fixtures(self, horas_adelante=72):
         self.llamadas += 1
+        # v5.1: la cuota trae su hora de captura (actualizado_en del fixture): 2 h antes de la noticia
         return {"fixtures": [{"fixture_id": 777, "fecha": MANANA, "torneo": "Challenger Lima", "superficie": "clay",
-                              "genero": "M", "jugador1": "Perez J.", "jugador2": "Rossi L.", "odd1": 1.40, "odd2": 2.90}]}
+                              "genero": "M", "jugador1": "Perez J.", "jugador2": "Rossi L.", "odd1": 1.40, "odd2": 2.90,
+                              "actualizado_en": self.cap}]}
 
 
 def _tavily_handler(estado):
@@ -48,7 +51,7 @@ def _tavily_handler(estado):
             return httpx.Response(200, json={"results": [
                 {"title": "Perez sufre molestias en la muñeca", "url": "https://tennistourtalk.com/perez-wrist",
                  "content": "Juan Perez, the Argentine, said after the match he felt pain in his right wrist...",
-                 "published_date": (HOY - timedelta(days=1)).strftime("%a, %d %b %Y 10:00:00 GMT"), "score": 0.9}],
+                 "published_date": (HOY - timedelta(hours=1)).strftime("%a, %d %b %Y %H:%M:%S GMT"), "score": 0.9}],
                 "response_time": 0.8})
         return httpx.Response(200, json={"results": [], "response_time": 0.3})
     return h
@@ -76,7 +79,9 @@ def _armar(conn, cfg_base, autorizar=True):
     estado = {"tavily": [], "gemini": []}
     tav = Tavily(api_key="tvly-test", transport=httpx.MockTransport(_tavily_handler(estado)))
     gem = Gemini(api_key="g-test", transport=httpx.MockTransport(_gemini_handler(estado)))
-    cfg = dict(cfg_base, NEWS_ACTIVO=1, NEWS_IDIOMAS="en,es,it")
+    # el radar temático (v5) se prueba aparte (test_v5_alertas); acá se apaga para que las
+    # cuentas de Tavily sigan siendo exactas
+    cfg = dict(cfg_base, NEWS_ACTIVO=1, NEWS_IDIOMAS="en,es,it", NEWS_RADAR_TEMATICO_ACTIVO=0)
     return estado, tav, gem, cfg
 
 
@@ -104,26 +109,38 @@ def test_recorrido_completo_sin_calibrar_y_calibrado(conn, cfg, monkeypatch):
     # costos anotados
     costos = r["pasos"]["costos"]
     assert costos["busquedas"] == 5 and costos["tokens"] == 1020 and costos["usd"] > 0
-    # descubridor: bandas SIN calibrar → 🔎 BANDAS_NO_CALIBRADAS, nunca 🔥
+    # descubridor: bandas SIN calibrar → v5: 🔥 EXPERIMENTAL... pero v5.2: la única cuota es de ANTES de la
+    # noticia → no se sabe si el mercado ya la incorporó → 🔎 pendiente de actualización de cuota
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
-    assert e["tipo_alerta"] == "INTERESANTE" and e["motivo"] == "BANDAS_NO_CALIBRADAS"
-    assert e["banda_utr"] == "FAVORITO" and e["banda_mercado"] == "FAVORITO" and e["cuota_x"] == 1.40
-    assert "sin calibrar" in e["texto_discord"] and "%" not in e["texto_discord"]
-    # segundo ciclo: nada se vuelve a pagar (misma URL, cola reprogramada)
+    assert e["tipo_alerta"] == "INTERESANTE" and e["motivo"] == "CUOTA_SIN_ACTUALIZAR"
+    assert "pendiente de actualización de cuota" in e["conclusion"] and "última cuota confirmada 08/10 12:00 UTC" in e["conclusion"]
+    a = conn.execute("SELECT * FROM news_alerta WHERE tipo='INTERESANTE'").fetchone()
+    assert "⏳ Pendiente de confirmar la reacción del mercado." in a["texto_discord"] and "🟢 PODRÍA FAVORECER A: LUCA ROSSI @2.90" in a["texto_discord"]
+    # segundo ciclo: nada se vuelve a pagar (misma URL, cola reprogramada); RankingFTR confirma la MISMA cuota
+    # 10 min después de la noticia → ahora sí: el mercado no reaccionó → 🔥 EXPERIMENTAL
+    ClienteFTR.cap = (HOY + timedelta(minutes=10)).isoformat()
     r2 = tareas.ciclo(conn, cliente=ClienteFTR(), cfg=c, tavily=tav, gemini=gem, ahora=HOY + timedelta(minutes=15))
     assert tav.llamadas == 5 and gem.llamadas == 1 and r2["pasos"]["radar"]["jugadores"] == 0
+    e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
+    assert e["tipo_alerta"] == "FUEGO_EXPERIMENTAL" and e["motivo"] == "CONTRA_X"
+    assert e["banda_utr"] == "FAVORITO" and e["banda_mercado"] == "FAVORITO" and e["cuota_x"] == 1.40
+    assert e["texto_discord"].startswith("🔥 FULLTENNIS · POSIBLE VALOR EXPERIMENTAL") and "%" not in e["texto_discord"]
+    assert "🟢 JUGADOR FAVORECIDO: LUCA ROSSI" in e["texto_discord"] and "💰 CUOTA: 2.90" in e["texto_discord"]
+    assert "📈 La cuota de Perez sigue en 1.40 después de la noticia." in e["texto_discord"]
+    assert "⚠️ Posible oportunidad sin validar estadísticamente." in e["texto_discord"]
     # la calibración automática: RankingFTR dijo NO → bandas en 0 y quedó anotado
     assert r["pasos"]["calibracion"]["veredicto"] == "NO_CALIBRADAS" and r["pasos"]["calibracion"]["bandas_calibradas"] == 0
     # 6 h después RankingFTR responde CALIBRADAS_OK → el motor enciende las bandas solo y sale 🔥 contra Perez
     ftr_ok = ClienteFTR(); ftr_ok.veredicto = "CALIBRADAS_OK"
-    c2 = dict(c)
+    c2 = dict(c, NEWS_BANDAS_AUTO=1)          # v5: el automático es opcional (default 0); acá se prueba encendido
     r3 = tareas.ciclo(conn, cliente=ftr_ok, cfg=c2, tavily=tav, gemini=gem, ahora=HOY + timedelta(hours=7))
     assert r3["pasos"]["calibracion"] == {"veredicto": "CALIBRADAS_OK", "muestra": 420, "bandas_calibradas": 1, "cambio": 1}
     assert config.leer_config(conn)["NEWS_BANDAS_CALIBRADAS"] == 1          # quedó guardado en news_config
     c2["NEWS_BANDAS_CALIBRADAS"] = 1
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
     assert r3["pasos"]["descubridor"]["FUEGO"] == 1 and e["tipo_alerta"] == "FUEGO" and e["motivo"] == "CONTRA_X"
-    assert e["texto_discord"].startswith("🔥 FULLTENIS") and "Perez" in e["texto_discord"]
+    assert e["texto_discord"].startswith("🔥 FULLTENNIS · POSIBLE VALOR POR NOTICIAS") and "Perez" in e["texto_discord"]
+    assert "✅ Lectura UTR/cuota validada" in e["texto_discord"]
     assert "Challenger Lima" in e["texto_discord"]
     assert conn.execute("SELECT COUNT(*) FROM news_evaluacion").fetchone()[0] == 1   # una por partido
     # señales: con NEWS_DISCORD_ACTIVO=0 nada; con 1, la 🔥
@@ -136,9 +153,19 @@ def test_recorrido_completo_sin_calibrar_y_calibrado(conn, cfg, monkeypatch):
         assert t.get("/news/senales", headers=h).json() == {"senales": [], "motivo": "NEWS_DISCORD_ACTIVO=0"}
         t.post("/news/config", headers=h, json={"clave": "NEWS_DISCORD_ACTIVO", "valor": "1", "por": "t"})
         s = t.get("/news/senales", headers=h).json()["senales"]
-        assert len(s) == 1 and s[0]["tipo_alerta"] == "FUEGO" and s[0]["texto_voz"]
-        r = t.post("/news/senales/dicho", headers=h, json={"avisos": [{"id": s[0]["id"], "dicho": True, "en": HOY.isoformat()}]})
-        assert r.json()["marcadas"] == 1
+        # v5: la 📰 NOTICIA (lesión externa nivel B) + la 🔥 validada; la 🔥 experimental
+        # del primer ciclo quedó SUPERADA por la validada (mismo partido, no se había dicho)
+        # la 🔎 "pendiente de cuota" del 1.er ciclo quedó superada por la 🔥 (no se había dicho)
+        assert [x["tipo_alerta"] for x in s] == ["NOTICIA", "FUEGO"] and all(x["texto_voz"] for x in s)
+        sup = conn.execute("SELECT dicho_discord, dicho_motivo FROM news_alerta WHERE tipo='INTERESANTE'").fetchone()
+        assert sup["dicho_discord"] == 2 and sup["dicho_motivo"] == "SUPERADA_POR_FUEGO_EXPERIMENTAL"
+        assert "🔴 PERJUDICA A: JUAN PEREZ" in s[0]["texto_discord"] and "🟢 PODRÍA FAVORECER A: LUCA ROSSI" in s[0]["texto_discord"]
+        assert "💰 Perez 1.40 | Rossi 2.90" in s[0]["texto_discord"] and "http" not in s[0]["texto_discord"]
+        assert s[0]["motivo"].startswith("noticia externa LESION_MOLESTIA nivel B")
+        sup = conn.execute("SELECT dicho_discord, dicho_motivo FROM news_alerta WHERE tipo='FUEGO_EXPERIMENTAL'").fetchone()
+        assert sup["dicho_discord"] == 2 and sup["dicho_motivo"] == "SUPERADA_POR_VALIDADA"
+        r = t.post("/news/senales/dicho", headers=h, json={"avisos": [{"id": x["id"], "dicho": True, "en": HOY.isoformat()} for x in s]})
+        assert r.json()["marcadas"] == 2
         assert t.get("/news/senales", headers=h).json()["senales"] == []          # no se repite
         hoy = t.get("/news/hoy", headers=h).json()
         assert hoy["evaluaciones"][0]["dicho_discord"] == 1 and hoy["eventos"][0]["categoria"] == "LESION_MOLESTIA"
@@ -147,7 +174,7 @@ def test_recorrido_completo_sin_calibrar_y_calibrado(conn, cfg, monkeypatch):
     c3 = dict(c2, NEWS_BANDAS_CALIBRADAS=0)
     tareas.ciclo(conn, cliente=ClienteFTR(), cfg=c3, tavily=tav, gemini=gem, ahora=HOY + timedelta(hours=7, minutes=15))
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
-    assert e["tipo_alerta"] == "FUEGO" and e["dicho_motivo"] == "INTERESANTE:BANDAS_NO_CALIBRADAS"
+    assert e["tipo_alerta"] == "FUEGO" and e["dicho_motivo"] == "FUEGO_EXPERIMENTAL:CONTRA_X"
 
 
 def test_regreso_no_borra_lesion_en_el_recorrido(conn, cfg):

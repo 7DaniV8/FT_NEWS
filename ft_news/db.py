@@ -218,6 +218,62 @@ CREATE TABLE IF NOT EXISTS news_evaluacion (
     version_motor    TEXT,
     creado_en        TEXT NOT NULL);
 
+-- 📣 ALERTAS (v5, 09/10/2026 — pedido de Rubén): lo que viaja a Discord, con
+-- su motivo de selección y evidencia. Tipos: NOTICIA (📰, sin partido
+-- necesario) · INTERESANTE (🔎) · FUEGO (🔥 validada) · FUEGO_EXPERIMENTAL
+-- (🔥 experimental: evidencia sólida, bandas sin validar).
+CREATE TABLE IF NOT EXISTS news_alerta (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo             TEXT NOT NULL,
+    clave            TEXT NOT NULL UNIQUE,            -- dedupe: tipo:jugador:categoria / tipo:partido
+    jugador_id       INTEGER,
+    rival_id         INTEGER,
+    partido_id       INTEGER,
+    evaluacion_id    INTEGER,
+    evento_ids_json  TEXT,
+    motivo_seleccion TEXT,
+    evidencia_json   TEXT,
+    texto_discord    TEXT,
+    texto_voz        TEXT,
+    dicho_discord    INTEGER NOT NULL DEFAULT 0,      -- 0 pendiente · 1 dicho · 2 omitido
+    dicho_en         TEXT,
+    dicho_motivo     TEXT,
+    creado_en        TEXT NOT NULL,
+    actualizado_en   TEXT NOT NULL);
+
+-- Un partido real, varios proveedores: cada fixture_id que lo trajo.
+CREATE TABLE IF NOT EXISTS news_partido_fuente (
+    fixture_id       INTEGER PRIMARY KEY,
+    partido_id       INTEGER NOT NULL,
+    proveedor        TEXT,
+    torneo           TEXT,
+    fecha            TEXT,
+    visto_en         TEXT NOT NULL);
+
+-- v5.1: cada observación de cuota, por proveedor y hora (Rubén: "conserva
+-- proveedor, hora y precio de cada observación"). cuota1/cuota2 van en el
+-- orden del partido (jugador1/jugador2), no del fixture.
+CREATE TABLE IF NOT EXISTS news_cuota_obs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    partido_id       INTEGER NOT NULL,
+    fixture_id       INTEGER,
+    proveedor        TEXT NOT NULL,
+    cuota1           REAL,
+    cuota2           REAL,
+    capturada_en     TEXT,                           -- hora del proveedor (actualizado_en del fixture) si la trae
+    visto_en         TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_news_cuota_obs_partido ON news_cuota_obs(partido_id, id);
+
+-- Historial de cambios de la memoria (verificable): nuevo, superado,
+-- vencido, verificado por partido completo, desmentido, confirmado.
+CREATE TABLE IF NOT EXISTS news_evento_historial (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    evento_id        INTEGER NOT NULL,
+    cambio           TEXT NOT NULL,
+    detalle          TEXT,
+    por              TEXT,
+    creado_en        TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS news_resultado (
     evaluacion_id    INTEGER PRIMARY KEY,
     ganador_id       INTEGER,
@@ -277,6 +333,18 @@ _COLUMNAS_NUEVAS = (
     ("news_evaluacion", "actualizado_en", "TEXT"),
     ("news_evaluacion", "dicho_motivo", "TEXT"),
     ("news_jugador_cola", "ultimo_error", "TEXT"),
+    # v5 (09/10/2026): diagnóstico por artículo y memoria verificable
+    ("news_articulo", "resultado", "TEXT"),          # EVENTO | OTRO_JUGADOR | IDENTIDAD_DUDOSA | SIN_FECHA | FUERA_DE_ESQUEMA | ERROR
+    ("news_articulo", "motivo", "TEXT"),
+    ("news_articulo", "jugador_id", "INTEGER"),
+    ("news_articulo", "origen", "TEXT"),             # radar | tematico | rss
+    ("news_busqueda", "origen", "TEXT"),             # radar | tematico
+    ("news_evento", "origen", "TEXT"),               # EXTERNO | INTERNO
+    ("news_partido", "cuota_proveedor", "TEXT"),     # v5.1: de quién es la cuota vigente
+    ("news_cuota_obs", "hasta_en", "TEXT"),          # v5.2: última hora en que ese precio se vio vigente
+    ("news_evento", "titular", "TEXT"),              # v6: el hecho en ≤ 60 caracteres, para Discord
+    ("news_articulo", "intentos", "INTEGER NOT NULL DEFAULT 0"),   # v5.1: reintentos de clasificación
+    ("news_articulo", "reintentar_en", "TEXT"),
 )
 
 

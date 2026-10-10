@@ -3,9 +3,11 @@ ft_news/lectores/rss.py — RSS de la prensa AUTORIZADA (segunda entrega).
 
 Gratis y complementario a Tavily: cada hora se leen los feeds de las fuentes
 con autorizada=1 que tengan feed conocido, se descartan las URLs ya vistas y
-cada artículo nuevo se cruza con los jugadores de la cola (el nombre completo
-tiene que aparecer en título o resumen). Solo los que coinciden pasan a
-Gemini (radar.procesar_articulo), así que el costo es solo la clasificación.
+cada artículo nuevo se cruza con TODO el padrón (v5; antes solo la cola —
+Rubén: "investigar jugadores aunque no tengan partidos"): el nombre completo
+tiene que aparecer en título o resumen. Solo los que coinciden pasan al
+clasificador (radar.procesar_articulo), así que el costo es solo la
+clasificación; si sale un evento externo fuerte, radar emite 📰 y encola.
 """
 from __future__ import annotations
 
@@ -82,12 +84,10 @@ def _coincide(nombre: str, texto: str) -> bool:
 
 def correr(conn, cfg: dict, gemini, ahora: Optional[datetime] = None, transport=None) -> dict:
     ahora = ahora or datetime.now(timezone.utc)
-    res = {"feeds": 0, "articulos": 0, "nuevos": 0, "coincidencias": 0, "eventos": 0, "errores": []}
+    res = {"feeds": 0, "articulos": 0, "nuevos": 0, "coincidencias": 0, "eventos": 0, "alertas": 0, "errores": []}
     if gemini is None:
-        res["errores"].append("sin GEMINI_API_KEY")
+        res["errores"].append("sin clasificador (GEMINI_API_KEY / ANTHROPIC_API_KEY)")
         return res
-    jugadores = [dict(r) for r in conn.execute(
-        "SELECT j.* FROM news_jugador j JOIN news_jugador_cola c ON c.jugador_id=j.id").fetchall()]
     cli = httpx.Client(timeout=20, transport=transport, headers={"User-Agent": "FT-News/1 (FullTenis)"})
     for dominio, url in FEEDS.items():
         if not fuentes.permitida(conn, dominio, cfg):
@@ -102,24 +102,29 @@ def correr(conn, cfg: dict, gemini, ahora: Optional[datetime] = None, transport=
             continue
         res["articulos"] += len(arts)
         for art in arts:
-            aid = radar._articulo_nuevo(conn, art)
+            aid = radar._articulo_nuevo(conn, art, "rss", None, ahora)
             if aid is None:
                 continue
             res["nuevos"] += 1
             texto = f"{art['titulo']} {art['contenido']}"
-            for j in jugadores:
-                if not _coincide(j["nombre"], texto):
-                    continue
+            nombrados = jg.buscar_en_texto(conn, texto)
+            if not nombrados:
+                radar._marcar_articulo(conn, aid, "SIN_JUGADOR_DEL_PADRON", "no nombra a nadie del padrón")
+                continue
+            for j in nombrados[:3]:
                 res["coincidencias"] += 1
                 if not costos.puede_gastar(conn, cfg)["ok"]:
                     return res
-                jug = {"jugador_id": j["id"], "nombre": j["nombre"], "pais": j["pais"], "genero": j["genero"],
-                       "circuito": j["circuito"]}
+                jug = {"jugador_id": j["id"], "nombre": j["nombre"], "pais": j.get("pais"), "genero": j.get("genero"),
+                       "circuito": j.get("circuito")}
                 try:
                     out = radar.procesar_articulo(conn, cfg, gemini, jug, art, aid, ahora)
                 except Exception as e:
-                    res["errores"].append(f"gemini: {e}")
+                    res["errores"].append(f"clasificador: {e}")
+                    radar._fallo_clasificacion(conn, aid, ahora, str(e), getattr(e, "pausa_seg", 3600), jugador_id=j["id"])
                     break
                 if out["resultado"] == "EVENTO":
                     res["eventos"] += 1
+                    if (out.get("alerta") or {}).get("alerta_id"):
+                        res["alertas"] += 1
     return res

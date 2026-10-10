@@ -115,6 +115,40 @@ def buscar_por_nombre(conn, nombre: str, genero: Optional[str] = None) -> Option
     return cands[0] if len(cands) == 1 else None
 
 
+_PADRON_CACHE: dict = {}
+
+
+def buscar_en_texto(conn, texto: str) -> list[dict]:
+    """v5 (radar temático / RSS): ¿a quién del padrón nombra este texto?
+    Todos los tokens del nombre tienen que aparecer y al menos uno de ≥ 4
+    letras (evita 'Li' o 'Na' sueltos). Padrón cacheado por tamaño."""
+    toks = set(normalizar(texto).split())
+    if not toks:
+        return []
+    n = conn.execute("SELECT COUNT(*), MAX(actualizado_en) FROM news_jugador").fetchone()
+    clave = (id(conn), n[0], n[1])
+    if _PADRON_CACHE.get("clave") != clave:
+        _PADRON_CACHE["clave"] = clave
+        _PADRON_CACHE["filas"] = [
+            (set(r["nombre_norm"].split()), dict(r)) for r in conn.execute(
+                "SELECT id, nombre, nombre_norm, pais, genero, circuito, utr_singles, utr_en FROM news_jugador "
+                "WHERE nombre_norm LIKE '% %'").fetchall()]
+    out = []
+    for ntoks, fila in _PADRON_CACHE["filas"]:
+        if len(ntoks) >= 2 and ntoks <= toks and any(len(t) >= 4 for t in ntoks):
+            out.append(fila)
+    # 'Juan Perez' y 'Perez J.' del mismo jugador: se queda el nombre completo
+    out.sort(key=lambda f: -len(f["nombre_norm"]))
+    vistos, final = set(), []
+    for f in out:
+        k = (f.get("utr_player_id"), f["nombre_norm"]) if f.get("utr_player_id") else (None, f["nombre_norm"])
+        if k in vistos:
+            continue
+        vistos.add(k)
+        final.append(f)
+    return final
+
+
 def sincronizar_padron(conn, cliente) -> dict:
     """Copia el padrón UTR (identidad maestra) a news_jugador."""
     n, desde = 0, 0

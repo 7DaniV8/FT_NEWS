@@ -100,15 +100,40 @@ def test_contexto_carga_viaje_localia_antecedentes_defensa(conn, cfg):
     # el descubridor con contexto: Perez (X) tiene CARGA (fuerte, negativa) + VIAJE (negativa) vs LOCALIA/ANTECEDENTE (positivas)
     # → dirección por fuerza: hay fuerte negativa → NEGATIVA; con bandas calibradas y mercado alineado → 🔥 contra Perez
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
-    assert e["tipo_alerta"] == "FUEGO" and e["direccion_neta"] == "NEGATIVA"
+    # v5: con contexto propio solamente (carga, viaje, localía) NO hay 🔥: queda 🔎
+    assert e["tipo_alerta"] == "INTERESANTE" and e["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE" and e["direccion_neta"] == "NEGATIVA"
 
 
 # ── Motor 5 ──────────────────────────────────────────────────────────────
+def _noticia_externa_perez(conn, categoria="LESION_MOLESTIA", direccion="NEGATIVA"):
+    """v5: una 🔥 exige una noticia EXTERNA fuerte; la carga calculada sola no alcanza."""
+    from ft_news import memoria
+    jp = conn.execute("SELECT id FROM news_jugador WHERE nombre='Juan Perez'").fetchone()
+    aid = conn.execute("INSERT INTO news_articulo (url, dominio, titulo, creado_en) VALUES (?,?,?,?)",
+                       (f"https://tennistourtalk.com/perez-{categoria.lower()}", "tennistourtalk.com", "t", HOY.isoformat())).lastrowid
+    ev = memoria.nuevo_evento(jp["id"], categoria, direccion, "DECLARACION", "B", (HOY - timedelta(days=1)).isoformat(),
+                              fuente="tennistourtalk.com", enlace="https://tennistourtalk.com/perez", articulo_id=aid,
+                              resumen_es="Perez declaró molestias en la muñeca", confianza_identidad=0.95)
+    memoria.guardar_evento_db(conn, ev)
+    # v5.1: una 🔥 exige investigación RECIENTE de los dos (frescura por búsqueda, no por
+    # eventos vigentes): acá se simula que el radar los buscó hace 1 h.
+    for nombre in ("Juan Perez", "Luca Rossi"):
+        j = conn.execute("SELECT id FROM news_jugador WHERE nombre=?", (nombre,)).fetchone()
+        if j:
+            conn.execute("INSERT INTO news_jugador_cola (jugador_id, prioridad, motivo, situacion, circuito, proxima_busqueda_en, "
+                         "ultima_busqueda_en, actualizado_en) VALUES (?,1,'PARTIDO_PROXIMO','PARTIDO_24H','challenger',?,?,?) "
+                         "ON CONFLICT(jugador_id) DO UPDATE SET ultima_busqueda_en=excluded.ultima_busqueda_en",
+                         (j["id"], (HOY + timedelta(hours=5)).isoformat(), (HOY - timedelta(hours=1)).isoformat(), HOY.isoformat()))
+    conn.commit()
+
+
 def test_cierre_resultado_retiro_r4_y_marca(conn, cfg):
     c = _sin_proveedores(conn, cfg)
     ftr = FTR([_h(1, "Juan Perez", "X Uno", "6-4 3-6 7-5"), _h(2, "Juan Perez", "X Dos", "7-6 6-7 6-3"),
                _h(3, "Juan Perez", "X Tres", "6-2 4-6 6-4"), _h(4, "Juan Perez", "X Cuatro", "6-1 6-1")])
     tareas.ciclo(conn, cliente=ftr, cfg=c, ahora=HOY)
+    _noticia_externa_perez(conn)                       # v5: hace falta la noticia externa
+    tareas.ciclo(conn, cliente=ftr, cfg=c, ahora=HOY + timedelta(minutes=15))
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
     assert e["tipo_alerta"] == "FUEGO" and e["cuota_x"] == 1.40
     # el partido se juega; el mercado subió la cuota de Perez (hacia la noticia negativa) y Rossi gana por retiro
@@ -288,8 +313,11 @@ def test_dashboard_discord(conn, cfg, monkeypatch):
     """Dashboard: solo las 🔥 dichas; el pick es el lado de la noticia."""
     from ft_news import dashboard
     c = _sin_proveedores(conn, cfg)
-    tareas.ciclo(conn, cliente=FTR([_h(1, "Juan Perez", "X Uno", "6-4 3-6 7-5"), _h(2, "Juan Perez", "X Dos", "7-6 6-7 6-3"),
-                                     _h(3, "Juan Perez", "X Tres", "6-2 4-6 6-4"), _h(4, "Juan Perez", "X Cuatro", "6-1 6-1")]), cfg=c, ahora=HOY)
+    ftr = FTR([_h(1, "Juan Perez", "X Uno", "6-4 3-6 7-5"), _h(2, "Juan Perez", "X Dos", "7-6 6-7 6-3"),
+               _h(3, "Juan Perez", "X Tres", "6-2 4-6 6-4"), _h(4, "Juan Perez", "X Cuatro", "6-1 6-1")])
+    tareas.ciclo(conn, cliente=ftr, cfg=c, ahora=HOY)
+    _noticia_externa_perez(conn)                       # v5: hace falta la noticia externa
+    tareas.ciclo(conn, cliente=ftr, cfg=c, ahora=HOY + timedelta(minutes=15))
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
     assert e["tipo_alerta"] == "FUEGO" and e["direccion_neta"] == "NEGATIVA"
     assert dashboard.armar(conn)["kpis"]["total"] == 0                      # todavía no se dijo

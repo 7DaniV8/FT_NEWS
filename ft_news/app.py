@@ -17,12 +17,13 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from ft_news import VERSION, config, costos, evaluador, fuentes, memoria, tareas
+from ft_news import VERSION, alertas, cobertura, config, costos, evaluador, fuentes, memoria, tareas
 from ft_news.db import config_guardar, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
@@ -72,8 +73,19 @@ def estado(conn=Depends(_conn)):
             "fuentes": {"total": n("news_fuente"),
                         "autorizadas": conn.execute("SELECT COUNT(*) FROM news_fuente WHERE autorizada=1").fetchone()[0]},
             "contadores": {t: n(t) for t in ("news_jugador", "news_jugador_cola", "news_evento", "news_partido",
-                                             "news_evaluacion", "news_revision")},
+                                             "news_evaluacion", "news_revision", "news_alerta", "news_articulo")},
+            "alertas": _alertas_resumen(conn),
             "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
+
+
+def _alertas_resumen(conn) -> dict:
+    hoy = datetime.now(timezone.utc).date().isoformat()
+    out = {"pendientes": {}, "dichas_hoy": {}, "omitidas_hoy": {}}
+    for r in conn.execute("SELECT tipo, dicho_discord, COUNT(*) n FROM news_alerta WHERE dicho_discord=0 OR creado_en>=? "
+                          "GROUP BY tipo, dicho_discord", (hoy,)).fetchall():
+        k = {0: "pendientes", 1: "dichas_hoy", 2: "omitidas_hoy"}[r["dicho_discord"]]
+        out[k][r["tipo"]] = r["n"]
+    return out
 
 
 @app.get("/news/config", dependencies=[Depends(_auth)])
@@ -131,8 +143,14 @@ def senales(conn=Depends(_conn)):
         return {"senales": [], "motivo": "NEWS_DISCORD_ACTIVO=0"}
     campos = ("id", "tipo_alerta", "motivo", "conclusion", "texto_discord", "texto_voz", "jugador_x", "rival", "torneo",
               "fecha_estimada", "genero", "circuito", "fixture_id", "cuota_x", "cuota_rival", "utr_x", "utr_rival",
-              "banda_utr", "banda_mercado", "nivel", "creado_en", "actualizado_en")
-    return {"senales": [{k: f.get(k) for k in campos} for f in evaluador.senales(conn, cfg)]}
+              "banda_utr", "banda_mercado", "nivel", "creado_en", "actualizado_en",
+              "partido_id", "evaluacion_id", "jugador_id", "rival_id", "clave")      # v5
+    out = []
+    for f in evaluador.senales(conn, cfg):
+        d = {k: f.get(k) for k in campos}
+        d["experimental"] = f.get("tipo_alerta") == "FUEGO_EXPERIMENTAL"
+        out.append(d)
+    return {"senales": out}
 
 
 class DichoIn(BaseModel):
@@ -170,7 +188,7 @@ def revision_post(rid: int, body: ResolverIn, conn=Depends(_conn)):
     if not rv:
         raise HTTPException(status_code=404, detail="revisión no encontrada")
     acc = body.accion.upper()
-    if acc not in ("CONFIRMAR", "DESCARTAR", "ES_EL_JUGADOR", "CATEGORIA"):
+    if acc not in ("CONFIRMAR", "DESCARTAR", "ES_EL_JUGADOR", "CATEGORIA", "DESMENTIR"):
         raise HTTPException(status_code=400, detail="acción inválida")
     if acc == "CATEGORIA" and body.categoria not in tx.CATEGORIAS:
         raise HTTPException(status_code=400, detail="categoría desconocida")
@@ -179,6 +197,13 @@ def revision_post(rid: int, body: ResolverIn, conn=Depends(_conn)):
         if rv["evento_id"]:
             if acc == "DESCARTAR":
                 conn.execute("UPDATE news_evento SET estado='DESCARTADO', actualizado_en=? WHERE id=?", (ahora_iso(), rv["evento_id"]))
+                memoria.anotar_historial(conn, rv["evento_id"], "DESCARTADO", "revisión manual", body.por or "revision")
+            elif acc == "DESMENTIR":
+                # v5 (Rubén §4: estado confirmado / pendiente / desmentido)
+                conn.execute("UPDATE news_evento SET estado='DESMENTIDO', actualizado_en=? WHERE id=?", (ahora_iso(), rv["evento_id"]))
+                memoria.anotar_historial(conn, rv["evento_id"], "DESMENTIDO", "revisión manual", body.por or "revision")
+            elif acc == "CONFIRMAR":
+                memoria.anotar_historial(conn, rv["evento_id"], "CONFIRMADO", "revisión manual", body.por or "revision")
             elif acc == "ES_EL_JUGADOR":
                 conn.execute("UPDATE news_evento SET estado='VIGENTE', confianza_identidad=1.0, actualizado_en=? WHERE id=? "
                              "AND estado='DESCARTADO'", (ahora_iso(), rv["evento_id"]))
@@ -245,7 +270,10 @@ def hoy(conn=Depends(_conn), limite: int = 60):
     cola = {r["situacion"]: r["n"] for r in conn.execute(
         "SELECT situacion, COUNT(*) n FROM news_jugador_cola GROUP BY situacion").fetchall()}
     revision = conn.execute("SELECT COUNT(*) FROM news_revision WHERE estado='PENDIENTE'").fetchone()[0]
+    for ev in eventos:
+        ev["origen"] = "EXTERNO" if ev.get("enlace") and not str(ev["enlace"]).startswith("contexto:") else "INTERNO"
     return {"evaluaciones": evs, "eventos": eventos, "cola": cola, "revision_pendiente": revision,
+            "alertas": alertas.listar(conn, limite), "alertas_resumen": _alertas_resumen(conn),
             "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
 
 
@@ -256,8 +284,98 @@ def costos_get(conn=Depends(_conn)):
             "topes": {k: cfg[k] for k in ("NEWS_MAX_BUSQUEDAS_DIA", "NEWS_MAX_TOKENS_DIA", "NEWS_MAX_USD_MES")}}
 
 
+@app.get("/news/jugadores/buscar", dependencies=[Depends(_auth)])
+def jugadores_buscar(conn=Depends(_conn), q: str = "", limite: int = 20):
+    """v5 (Rubén §10: "buscar un jugador y consultar todo su historial de noticias")."""
+    from ft_news import jugadores as jg
+    qn = jg.normalizar(q)
+    if len(qn) < 3:
+        return {"jugadores": []}
+    toks = qn.split()
+    filas = [dict(r) for r in conn.execute(
+        "SELECT j.id, j.nombre, j.pais, j.genero, j.circuito, j.utr_singles, j.utr_en, j.nombre_norm, "
+        "(SELECT COUNT(*) FROM news_evento e WHERE e.jugador_id=j.id) AS eventos, "
+        "(SELECT COUNT(*) FROM news_evento e WHERE e.jugador_id=j.id AND e.articulo_id IS NOT NULL) AS externos, "
+        "(SELECT COUNT(*) FROM news_alerta a WHERE a.jugador_id=j.id OR a.rival_id=j.id) AS alertas, "
+        "c.situacion, c.ultima_busqueda_en, c.proxima_busqueda_en FROM news_jugador j "
+        "LEFT JOIN news_jugador_cola c ON c.jugador_id=j.id WHERE " + " AND ".join(["j.nombre_norm LIKE ?"] * len(toks)) +
+        " ORDER BY eventos DESC, j.nombre LIMIT ?", (*[f"%{t}%" for t in toks], limite)).fetchall()]
+    return {"jugadores": filas}
+
+
 @app.get("/news/jugadores/{jugador_id}/memoria", dependencies=[Depends(_auth)])
 def memoria_get(jugador_id: int, conn=Depends(_conn)):
     hist = memoria.historial_db(conn, jugador_id)
-    return {"jugador_id": jugador_id, "eventos": hist, "lectura": memoria.lectura_contextual(hist, jugador_id),
-            "estado_fisico_sin_verificar": memoria.estado_fisico_sin_verificar(hist, jugador_id)}
+    j = conn.execute("SELECT id, nombre, pais, genero, circuito, utr_singles, utr_en FROM news_jugador WHERE id=?",
+                     (jugador_id,)).fetchone()
+    for ev in hist:
+        ev["origen"] = ev.get("origen") or ("EXTERNO" if ev.get("articulo_id") else "INTERNO")
+        ev["cambios"] = memoria.historial_cambios(conn, ev["id"])
+    alertas_j = alertas.listar(conn, 50)
+    alertas_j = [a for a in alertas_j if a.get("jugador_id") == jugador_id or a.get("rival_id") == jugador_id]
+    partidos_j = [dict(r) for r in conn.execute(
+        "SELECT p.id, p.torneo, p.fecha_estimada, p.estado, p.cuota1, p.cuota2, j1.nombre AS jugador1, j2.nombre AS jugador2 "
+        "FROM news_partido p JOIN news_jugador j1 ON j1.id=p.jugador1_id JOIN news_jugador j2 ON j2.id=p.jugador2_id "
+        "WHERE (p.jugador1_id=? OR p.jugador2_id=?) AND p.estado<>'DUPLICADO' ORDER BY p.fecha_estimada DESC LIMIT 20",
+        (jugador_id, jugador_id)).fetchall()]
+    busquedas = [dict(r) for r in conn.execute(
+        "SELECT consulta, idioma, resultados, creado_en FROM news_busqueda WHERE jugador_id=? ORDER BY id DESC LIMIT 20",
+        (jugador_id,)).fetchall()]
+    return {"jugador_id": jugador_id, "jugador": dict(j) if j else None, "eventos": hist,
+            "lectura": memoria.lectura_contextual(hist, jugador_id),
+            "estado_fisico_sin_verificar": memoria.estado_fisico_sin_verificar(hist, jugador_id),
+            "alertas": alertas_j, "partidos": partidos_j, "busquedas": busquedas}
+
+
+@app.get("/news/alertas", dependencies=[Depends(_auth)])
+def alertas_get(conn=Depends(_conn), limite: int = 100, tipo: str = ""):
+    """v5 panel de alertas: enviadas, pendientes, omitidas; motivo de selección,
+    evidencia, estado del partido y resultado final."""
+    return {"alertas": alertas.listar(conn, limite, tipo or None), "resumen": _alertas_resumen(conn)}
+
+
+@app.get("/news/diagnostico", dependencies=[Depends(_auth)])
+def diagnostico_get(conn=Depends(_conn), dias: int = 7):
+    """v5 (Rubén §3): búsquedas, artículos, descartados y motivo, fuentes, errores,
+    externos vs internos, costo por proveedor. Todo por los últimos `dias`."""
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
+    q = lambda sql, *a: [dict(r) for r in conn.execute(sql, a).fetchall()]  # noqa: E731
+    busq = q("SELECT COALESCE(origen,'radar') origen, idioma, COUNT(*) n, SUM(CASE WHEN resultados=0 THEN 1 ELSE 0 END) sin_resultados, "
+             "SUM(resultados) resultados, ROUND(SUM(usd_estimado),4) usd FROM news_busqueda WHERE creado_en>=? "
+             "GROUP BY origen, idioma ORDER BY n DESC", desde)
+    busq_circuito = q("SELECT COALESCE(j.circuito,'?') circuito, COUNT(*) n, SUM(CASE WHEN b.resultados=0 THEN 1 ELSE 0 END) sin_resultados "
+                      "FROM news_busqueda b LEFT JOIN news_jugador j ON j.id=b.jugador_id WHERE b.creado_en>=? AND b.jugador_id IS NOT NULL "
+                      "GROUP BY circuito ORDER BY n DESC", desde)
+    arts = q("SELECT COALESCE(resultado,'(sin marcar)') resultado, COUNT(*) n FROM news_articulo WHERE creado_en>=? "
+             "GROUP BY resultado ORDER BY n DESC", desde)
+    arts_origen = q("SELECT COALESCE(origen,'radar') origen, COUNT(*) n FROM news_articulo WHERE creado_en>=? GROUP BY origen", desde)
+    fuentes_usadas = q("SELECT dominio, COUNT(*) n, SUM(CASE WHEN resultado='EVENTO' THEN 1 ELSE 0 END) eventos "
+                       "FROM news_articulo WHERE creado_en>=? GROUP BY dominio ORDER BY n DESC LIMIT 40", desde)
+    descartados = q("SELECT id, dominio, titulo, url, resultado, motivo, creado_en FROM news_articulo WHERE creado_en>=? "
+                    "AND resultado NOT IN ('EVENTO','PENDIENTE') ORDER BY id DESC LIMIT 60", desde)
+    eventos = q("SELECT CASE WHEN articulo_id IS NULL THEN 'INTERNO' ELSE 'EXTERNO' END origen, categoria, estado, COUNT(*) n "
+                "FROM news_evento WHERE creado_en>=? GROUP BY origen, categoria, estado ORDER BY origen, n DESC", desde)
+    externos_hoy = conn.execute("SELECT COUNT(*) FROM news_evento WHERE articulo_id IS NOT NULL AND creado_en>=?",
+                                (datetime.now(timezone.utc).date().isoformat(),)).fetchone()[0]
+    internos_hoy = conn.execute("SELECT COUNT(*) FROM news_evento WHERE articulo_id IS NULL AND creado_en>=?",
+                                (datetime.now(timezone.utc).date().isoformat(),)).fetchone()[0]
+    costos_prov = q("SELECT proveedor, SUM(busquedas) busquedas, SUM(articulos) articulos, SUM(tokens_entrada+tokens_salida) tokens, "
+                    "ROUND(SUM(usd_estimado),4) usd FROM news_costos_dia WHERE dia>=? GROUP BY proveedor", desde[:10])
+    cola = q("SELECT situacion, COALESCE(circuito,'?') circuito, COUNT(*) n, SUM(CASE WHEN ultima_busqueda_en IS NULL THEN 1 ELSE 0 END) nunca "
+             "FROM news_jugador_cola GROUP BY situacion, circuito ORDER BY situacion, n DESC")
+    errores = q("SELECT c.jugador_id, j.nombre, c.ultimo_error, c.actualizado_en FROM news_jugador_cola c JOIN news_jugador j ON j.id=c.jugador_id "
+                "WHERE c.ultimo_error IS NOT NULL AND c.ultimo_error<>'' ORDER BY c.actualizado_en DESC LIMIT 30")
+    est = estado_todo(conn)
+    pasos = {k[5:]: v.get("valor") for k, v in est.items() if k.startswith("paso_")}
+    partidos_unicos = conn.execute("SELECT COUNT(*) FROM news_partido WHERE estado<>'DUPLICADO'").fetchone()[0]
+    duplicados = conn.execute("SELECT COUNT(*) FROM news_partido WHERE estado='DUPLICADO'").fetchone()[0]
+    cfg = config.leer_config(conn)
+    reintentos = q("SELECT resultado, COUNT(*) n FROM news_articulo WHERE resultado IN ('PENDIENTE','ERROR','FUERA_DE_ESQUEMA','AGOTADO') "
+                   "GROUP BY resultado")
+    return {"dias": dias, "busquedas": busq, "busquedas_por_circuito": busq_circuito, "articulos": arts,
+            "cobertura": cobertura.por_circuito(conn, cfg, dias=dias), "reintentos": reintentos,
+            "articulos_por_origen": arts_origen, "fuentes": fuentes_usadas, "descartados": descartados,
+            "eventos": eventos, "hoy": {"externos": externos_hoy, "internos": internos_hoy},
+            "costos_por_proveedor": costos_prov, "cola": cola, "errores": errores, "pasos": pasos,
+            "partidos": {"unicos": partidos_unicos, "duplicados_fundidos": duplicados},
+            "alertas": _alertas_resumen(conn), "clasificador": (est.get("clasificador") or {}).get("valor")}

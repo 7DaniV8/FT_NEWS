@@ -25,9 +25,22 @@ URL = "https://api.tavily.com/search"
 USD_POR_CREDITO = 0.008
 
 
+def sin_claves(texto: str) -> str:
+    """v5.1: ninguna clave de API puede terminar en un log, en news_estado ni en
+    la pestaña (la de Gemini apareció en los logs de Railway el 09/10 por la
+    URL ?key=; desde v3 va en header, y esto es el cinturón)."""
+    import os
+    t = str(texto)
+    for var in ("TAVILY_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "FT_NEWS_SECRET", "FTR_INTERNAL_SECRET"):
+        v = os.getenv(var, "").strip()
+        if len(v) >= 8 and v in t:
+            t = t.replace(v, f"***{var}***")
+    return t
+
+
 class ErrorProveedor(Exception):
     def __init__(self, mensaje: str, pausa_seg: int = 300, fatal: bool = False):
-        super().__init__(mensaje)
+        super().__init__(sin_claves(mensaje))
         self.pausa_seg, self.fatal = pausa_seg, fatal
 
 

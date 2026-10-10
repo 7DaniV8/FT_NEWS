@@ -27,11 +27,26 @@ def run(cfg, **k):
 
 # ── Compuerta 0: sin calibrar nunca hay 🔥 y no se afirma nada del mercado
 def test_sin_calibrar_nunca_fuego(cfg):
+    # v5 (Rubén 09/10): con bandas sin calibrar y TODO lo demás en regla, sale
+    # 🔥 EXPERIMENTAL (nunca FUEGO validado) y lo dice; con el experimental
+    # apagado, 🔎 BANDAS_NO_CALIBRADAS como antes.
     r = run(cfg, eventos_x=[ev("LESION_MOLESTIA", "NEGATIVA")])
-    assert r["tipo_alerta"] == "INTERESANTE" and r["motivo"] == "BANDAS_NO_CALIBRADAS"
-    assert r["banda_utr"] == "FAVORITO" and r["banda_mercado"] == "FAVORITO"   # se registra igual
-    assert "descont" not in r["conclusion"].lower()
-    assert r["bandas_calibradas"] == 0
+    assert r["tipo_alerta"] == "FUEGO_EXPERIMENTAL" and r["motivo"] == "CONTRA_X"
+    assert r["banda_utr"] == "FAVORITO" and r["banda_mercado"] == "FAVORITO"
+    assert "EXPERIMENTAL" in r["conclusion"] and "sin validar" in r["conclusion"]
+    assert r["bandas_calibradas"] == 0 and r["externo"] == 1
+    assert any("sin validar" in x for x in r["explicaciones"])
+    r2 = run(dict(cfg, NEWS_EXPERIMENTAL_ACTIVO=0), eventos_x=[ev("LESION_MOLESTIA", "NEGATIVA")])
+    assert r2["tipo_alerta"] == "INTERESANTE" and r2["motivo"] == "BANDAS_NO_CALIBRADAS"
+    assert "descont" not in r2["conclusion"].lower()
+
+
+def test_solo_contexto_interno_nunca_fuego(cfg_calibrado):
+    # v5: la carga calculada por nosotros no es una noticia: acompaña, no dispara.
+    e = ev("CARGA_FISICA", "NEGATIVA", "A", "HECHO")
+    e.update(fuente="rankingftr.interno", enlace="contexto:7", articulo_id=None)
+    r = run(cfg_calibrado, eventos_x=[e])
+    assert r["tipo_alerta"] == "INTERESANTE" and r["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE" and r["externo"] == 0
 
 
 # ── Caso 1: favorito lesionado, cuota 1.40, ΔUTR 0.5 → 🔥 contra X
@@ -73,9 +88,16 @@ def test_debil_sola_no_da_fuego(cfg_calibrado):
 
 # ── Caso 6: dos débiles concordantes nivel A/B → 🔥 por acumulación
 def test_acumulacion_de_debiles(cfg_calibrado):
+    # v5: dos débiles concordantes alcanzan como evidencia, pero sin una noticia
+    # externa FUERTE no hay 🔥 (Rubén: "no una simple diferencia UTR" ni contexto solo).
     evs = [ev("LOCALIA", "POSITIVA", "A", "HECHO", id=1), ev("ANTECEDENTE_TORNEO", "POSITIVA", "B", id=2)]
     r = run(cfg_calibrado, eventos_x=evs, cuota_x=2.50, utr_x=12.0, utr_rival=12.1)
-    assert r["tipo_alerta"] == "FUEGO" and r["modo_evidencia"] == "ACUMULACION"
+    assert r["tipo_alerta"] == "INTERESANTE" and r["modo_evidencia"] == "ACUMULACION"
+    assert r["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE"
+    # con una fuerte externa además, sí
+    evs2 = evs + [ev("REGRESO", "POSITIVA", "B", "DECLARACION", id=3)]
+    r2 = run(cfg_calibrado, eventos_x=evs2, cuota_x=2.50, utr_x=12.0, utr_rival=12.1)
+    assert r2["tipo_alerta"] == "FUEGO"
 
 
 # ── Caso 7: nivel C nunca da 🔥
@@ -154,12 +176,22 @@ def test_textos_sin_prohibidos(cfg_calibrado):
     r.update(utr_x=12.9, utr_rival=12.4, cuota_x=1.40, cuota_rival=2.90)
     t = textos.armar(r, {"torneo": "Challenger Lima", "ronda": "R16", "fecha_estimada": MANANA},
                      {"nombre": "Jugador X"}, {"nombre": "Jugador Y"}, evs)
-    assert t["texto"].startswith("🔥 FULLTENIS")
+    assert t["texto"].startswith("🔥 FULLTENNIS · POSIBLE VALOR POR NOTICIAS")
     assert not textos.hay_prohibido(t["texto"]) and not textos.hay_prohibido(t["voz"])
-    assert "📊 ANÁLISIS:" in t["texto"] and "Posible valor en" in t["texto"] and "📰 Fuente:" in t["texto"]  # 08/10 noche: formato nuevo; el pie lo pone FT Discord
+    # v6 (formato definitivo): favorecido en MAYÚSCULAS con su cuota, motivo, sin enlaces
+    assert "🟢 JUGADOR FAVORECIDO: JUGADOR Y" in t["texto"] and "💰 CUOTA: 2.90" in t["texto"] and "🚨 MOTIVO:" in t["texto"]
+    assert "http" not in t["texto"] and "✅ Lectura UTR/cuota validada" in t["texto"]
+    assert t["voz"].startswith("Posible valor por noticias. Jugador Y, cuota 2.90, contra Jugador X.")
     assert textos.hay_prohibido("tiene 62% de probabilidad")
-    # sin calibrar, el texto no habla del mercado
+    # sin calibrar (v5): sale como EXPERIMENTAL y lo dice; nunca afirma "descontó" a secas
     r2 = run(cfg_calibrado.__class__(cfg_calibrado, NEWS_BANDAS_CALIBRADAS=0), eventos_x=evs)
     r2.update(utr_x=12.9, utr_rival=12.4, cuota_x=1.40)
     t2 = textos.armar(r2, {"torneo": "T"}, {"nombre": "X"}, {"nombre": "Y"}, evs)
-    assert "sin calibrar" in t2["texto"] and "descont" not in t2["texto"]
+    assert t2["texto"].startswith("🔥 FULLTENNIS · POSIBLE VALOR EXPERIMENTAL") and "⚠️ Posible oportunidad sin validar estadísticamente." in t2["texto"]
+    assert not textos.hay_prohibido(t2["texto"])
+    # sin calibrar y con el experimental apagado: no habla del mercado
+    r3 = run(cfg_calibrado.__class__(cfg_calibrado, NEWS_BANDAS_CALIBRADAS=0, NEWS_EXPERIMENTAL_ACTIVO=0), eventos_x=evs)
+    r3.update(utr_x=12.9, utr_rival=12.4, cuota_x=1.40)
+    t3 = textos.armar(r3, {"torneo": "T"}, {"nombre": "X"}, {"nombre": "Y"}, evs)
+    assert t3["texto"].startswith("🔎 FULLTENNIS · PARTIDO INTERESANTE") and "⚠️ Sin lectura de mercado validada." in t3["texto"]
+    assert "descont" not in t3["texto"] and "JUGADOR FAVORECIDO" not in t3["texto"]

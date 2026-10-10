@@ -21,8 +21,11 @@ Orden de compuertas (si una falla, baja al tipo indicado con su motivo):
   9  cruce dirección × desvío (tabla §4 paso 4)   → 🔥   o 🔎 MERCADO_YA_DESCONTO
  10  tope diario / un 🔥 por jugador y torneo     → 🔎   TOPE_DIARIO / YA_AVISADO
 
-Tipos de alerta: FUEGO (🔥 posible valor por noticias), INTERESANTE (🔎),
-NOTICIA (📰, la decide el radar, no este motor), NADA.
+Tipos de alerta: FUEGO (🔥 posible valor por noticias, bandas validadas),
+FUEGO_EXPERIMENTAL (🔥 experimental: todas las compuertas menos la 8),
+INTERESANTE (🔎), NOTICIA (📰, la decide alertas.py desde el radar), NADA.
+v5 (09/10/2026, Rubén): compuerta 5b — sin noticia EXTERNA fuerte no hay 🔥
+(la carga calculada acompaña, no decide); y "explicaciones" del mercado.
 """
 from __future__ import annotations
 
@@ -33,8 +36,19 @@ from ft_news import bandas as bd
 from ft_news import taxonomia as tx
 from ft_news.config import cortes_bandas
 
-VERSION_MOTOR = "news-descubridor-v2-fase0"
+VERSION_MOTOR = "news-descubridor-v3-experimental"
 _RANGO_NIVEL = {"A": 3, "B": 2, "C": 1}
+FUENTE_INTERNA = "rankingftr.interno"
+
+
+def es_externo(e: dict) -> bool:
+    """Noticia de una fuente externa (artículo) vs dato calculado por nosotros
+    (Motor 3: carga, antecedentes, viaje...). v5: una 🔥 exige lo primero."""
+    if e.get("origen") in ("EXTERNO", "INTERNO"):
+        return e["origen"] == "EXTERNO"
+    if e.get("articulo_id"):
+        return True
+    return str(e.get("fuente") or "") != FUENTE_INTERNA and not str(e.get("enlace") or "").startswith("contexto:")
 
 
 def _dt(s):
@@ -99,10 +113,11 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
     ahora = ahora or datetime.now(timezone.utc)
     cortes = cortes_bandas(cfg)
     calibradas = bool(cfg.get("NEWS_BANDAS_CALIBRADAS"))
+    experimental = bool(cfg.get("NEWS_EXPERIMENTAL_ACTIVO", 1))
     r = {"version_motor": VERSION_MOTOR, "tipo_alerta": "NADA", "motivo": None, "conclusion": "",
          "banda_utr": None, "banda_mercado": None, "desvio": None, "direccion_neta": None,
          "nivel": None, "modo_evidencia": None, "eventos_usados": [], "bandas_calibradas": int(calibradas),
-         "delta_utr": None}
+         "delta_utr": None, "externo": 0, "explicaciones": []}
 
     def baja(tipo, motivo, conclusion=""):
         r.update(tipo_alerta=tipo, motivo=motivo, conclusion=conclusion)
@@ -145,6 +160,18 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
     if not ok:
         return baja("INTERESANTE", "EVIDENCIA_INSUFICIENTE",
                     "La noticia no alcanza el nivel de evidencia exigido para hablar de valor.")
+    # 5b (v5, Rubén 09/10): sin una noticia EXTERNA fuerte no hay 🔥. Un cálculo
+    # propio de carga o antecedentes acompaña, pero no es una oportunidad.
+    externos = [e for e in usados if es_externo(e) and tx.es_fuerte(e["categoria"])
+                and _RANGO_NIVEL[e["nivel"]] >= _RANGO_NIVEL.get(str(cfg.get("NEWS_NIVEL_MIN_FUEGO", "B")), 2)]
+    r["externo"] = int(bool(externos))
+    if not externos:
+        return baja("INTERESANTE", "SIN_NOTICIA_EXTERNA_FUERTE",
+                    "Solo hay contexto calculado por nosotros (carga, antecedentes); sin noticia externa no se habla de valor.")
+    # Posibles explicaciones del mercado (para el texto; no deciden solas).
+    if dr and dr["eventos"]:
+        r["explicaciones"].append("el rival también tiene noticias/contexto vigente: " +
+                                  ", ".join(sorted({e["categoria"] for e in dr["eventos"]})[:3]))
     # 6 UTR
     if utr_x is None or utr_rival is None:
         return baja("INTERESANTE", "SIN_UTR", "Sin UTR de ambos jugadores no se compara con el mercado.")
@@ -161,14 +188,18 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
         return baja("INTERESANTE", "SIN_MERCADO", "Sin cuota disponible: contexto, no señal de mercado.")
     r["banda_mercado"] = bd.banda_mercado(cuota_x, cortes["cuota"])
     r["desvio"] = bd.desvio(r["banda_utr"], r["banda_mercado"])
-    # 0 bandas sin calibrar: hasta acá se registra todo, pero NO se afirma nada
-    if not calibradas:
+    # 0 bandas sin calibrar (v5): ya no corta acá. Si TODO lo demás pasa y
+    # NEWS_EXPERIMENTAL_ACTIVO=1, sale como 🔥 EXPERIMENTAL (nunca como valor
+    # validado); si está apagado, 🔎 BANDAS_NO_CALIBRADAS como antes.
+    if not calibradas and not experimental:
         return baja("INTERESANTE", "BANDAS_NO_CALIBRADAS",
                     "Bandas UTR/cuota sin calibrar con datos propios: no se emite lectura de mercado.")
     # 8 mercado en movimiento
     if cuota_apertura_x is not None:
         b0 = bd.banda_mercado(cuota_apertura_x, cortes["cuota"])
         mov = bd.desvio(b0, r["banda_mercado"])          # pasos > 0: X mejoró para el mercado
+        if mov and mov.get("pasos"):
+            r["explicaciones"].append(f"la cuota de X se movió desde la apertura ({cuota_apertura_x:.2f} → {cuota_x:.2f})")
         if mov and ((direccion == tx.NEGATIVA and mov["pasos"] < 0) or (direccion == tx.POSITIVA and mov["pasos"] > 0)):
             return baja("INTERESANTE", "MERCADO_EN_MOVIMIENTO",
                         "El mercado ya se movió una banda en la dirección de la noticia.")
@@ -186,9 +217,14 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
         return baja("INTERESANTE", "YA_AVISADO")
     if fuego_hoy >= int(cfg.get("NEWS_MAX_FUEGO_DIA", 10)):
         return baja("INTERESANTE", "TOPE_DIARIO")
+    if not calibradas:
+        tipo = "FUEGO_EXPERIMENTAL"
+        r["explicaciones"].append("bandas UTR/cuota todavía sin validar con datos propios (señal experimental)")
     r.update(tipo_alerta=tipo, motivo=lado,
              conclusion=(f"Por UTR X debería ser {r['banda_utr']}; el mercado lo tiene {r['banda_mercado']}; "
-                         f"la noticia es {direccion} para X. El mercado no parece haberla descontado."))
+                         f"la noticia es {direccion} para X. "
+                         + ("El mercado no parece haberla descontado." if calibradas
+                            else "Lectura EXPERIMENTAL: el mercado no parece haberla descontado, con bandas sin validar.")))
     return r
 
 
