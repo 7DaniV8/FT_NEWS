@@ -255,7 +255,16 @@ def informe(r: dict) -> str:
     for a in reversed(r["alertas"]):
         out.append(f"- **{a['tipo']}** · {a.get('jugador')}{' vs ' + a['rival'] if a.get('rival') else ' (sin partido)'} · "
                    f"dicho_discord={a['dicho_discord']}{' (' + str(a.get('dicho_motivo')) + ')' if a.get('dicho_motivo') else ''}")
-        out.append(f"  - por qué: {a['motivo_seleccion']}")
+        out.append(f"  - por qué (usuario): {a.get('motivo_simple')}")
+        out.append(f"  - por qué (técnico, admin): {a['motivo_seleccion']}")
+    # v7: la lectura simple de cada evaluación (lo que ve el usuario en la pestaña)
+    out += ["", "### Evaluaciones · lectura simple (v7, lo que ve el usuario)", ""]
+    for e in r["news"]["conn"].execute("SELECT id, tipo_alerta, motivo, lectura_json FROM news_evaluacion ORDER BY id").fetchall():
+        try:
+            l = json.loads(e["lectura_json"] or "{}")
+        except (TypeError, ValueError):
+            l = {}
+        out += [f"- evaluación #{e['id']} · técnico: {e['tipo_alerta']} / {e['motivo']}", "```", l.get("texto") or "(sin lectura)", "```", ""]
     out += ["", "## FT Intelligence", ""]
     for k, p in enumerate(r["intel"]["pasadas"], 1):
         out.append(f"- pasada {k}: {p['detalle']}")

@@ -345,6 +345,7 @@ _COLUMNAS_NUEVAS = (
     ("news_evento", "titular", "TEXT"),              # v6: el hecho en ≤ 60 caracteres, para Discord
     ("news_articulo", "intentos", "INTEGER NOT NULL DEFAULT 0"),   # v5.1: reintentos de clasificación
     ("news_articulo", "reintentar_en", "TEXT"),
+    ("news_evaluacion", "lectura_json", "TEXT"),     # v7: la lectura simple (líneas, resumen, favorecido, motivo en palabras)
 )
 
 

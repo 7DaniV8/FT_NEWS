@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from ft_news import VERSION, alertas, cobertura, config, costos, evaluador, fuentes, memoria, tareas
+from ft_news import VERSION, alertas, cobertura, config, costos, evaluador, explicar, fuentes, memoria, tareas
 from ft_news.db import config_guardar, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
@@ -249,13 +249,30 @@ def excel_get(conn=Depends(_conn)):
                     headers={"Content-Disposition": 'attachment; filename="ft_news_historico.xlsx"'})
 
 
+def _lectura(conn, e: dict, cfg: dict) -> dict:
+    """La lectura simple guardada (lectura_json) o, si la fila es anterior a v7, armada ahora."""
+    import json as _json
+    try:
+        l = _json.loads(e.get("lectura_json") or "{}")
+    except (TypeError, ValueError):
+        l = {}
+    if l.get("lineas"):
+        return l
+    try:
+        return explicar.evaluacion_desde_db(conn, e, cfg)
+    except Exception as ex:                          # pragma: no cover
+        return {"lineas": [], "texto": "", "resumen": explicar.motivo_simple(e.get("motivo")), "motivo": explicar.motivo_simple(e.get("motivo")),
+                "error": str(ex)}
+
+
 @app.get("/news/hoy", dependencies=[Depends(_auth)])
 def hoy(conn=Depends(_conn), limite: int = 60):
     """Para la pestaña 📰: evaluaciones recientes, eventos recientes, cola y revisión."""
     evs = [dict(r) for r in conn.execute(
         "SELECT e.id, e.tipo_alerta, e.motivo, e.conclusion, e.nivel, e.banda_utr, e.banda_mercado, e.desvio, "
         "e.direccion_neta, e.utr_x, e.utr_rival, e.cuota_x, e.cuota_rival, e.dicho_discord, e.dicho_motivo, "
-        "e.bandas_calibradas, e.texto_discord, e.actualizado_en, p.torneo, p.fecha_estimada, p.circuito, p.estado AS partido_estado, "
+        "e.bandas_calibradas, e.texto_discord, e.actualizado_en, e.lectura_json, e.eventos_json, e.partido_id, "
+        "e.jugador_x_id, e.rival_id, p.torneo, p.fecha_estimada, p.circuito, p.estado AS partido_estado, "
         "jx.nombre AS jugador_x, jr.nombre AS rival, r.score, r.retiro, r.era_interesante, r.mercado_hacia_noticia, "
         "jg.nombre AS ganador FROM news_evaluacion e JOIN news_partido p ON p.id=e.partido_id "
         "JOIN news_jugador jx ON jx.id=e.jugador_x_id JOIN news_jugador jr ON jr.id=e.rival_id "
@@ -272,6 +289,17 @@ def hoy(conn=Depends(_conn), limite: int = 60):
     revision = conn.execute("SELECT COUNT(*) FROM news_revision WHERE estado='PENDIENTE'").fetchone()[0]
     for ev in eventos:
         ev["origen"] = "EXTERNO" if ev.get("enlace") and not str(ev["enlace"]).startswith("contexto:") else "INTERNO"
+        ev["categoria_es"] = explicar.categoria_es(ev.get("categoria"))
+        ev["texto_simple"] = explicar.evento_simple(ev, ev.get("jugador"))
+        ev["estado_es"] = explicar.ESTADOS.get(ev.get("estado"), ev.get("estado"))
+    # v7 (Rubén): cada evaluación con su lectura en palabras simples (la técnica queda en los campos de siempre)
+    cfg = config.leer_config(conn)
+    for e in evs:
+        e["lectura"] = _lectura(conn, e, cfg)
+        e["motivo_simple"] = explicar.motivo_simple(e.get("motivo"))
+        e["dicho_motivo_simple"] = explicar.motivo_simple(e.get("dicho_motivo")) if e.get("dicho_motivo") else None
+        e.pop("eventos_json", None)
+        e.pop("lectura_json", None)
     return {"evaluaciones": evs, "eventos": eventos, "cola": cola, "revision_pendiente": revision,
             "alertas": alertas.listar(conn, limite), "alertas_resumen": _alertas_resumen(conn),
             "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
@@ -360,7 +388,20 @@ def evaluacion_detalle(eid: int, conn=Depends(_conn)):
         "SELECT id, titulo, url, dominio, resultado, motivo, creado_en FROM news_articulo WHERE jugador_id=? ORDER BY id DESC LIMIT 12", (e[k],))]
         for k in ("jugador_x_id", "rival_id")}
     res = conn.execute("SELECT * FROM news_resultado WHERE evaluacion_id=?", (eid,)).fetchone()
-    return {"evaluacion": e, "partido": p, "jugador_x": js["jugador_x_id"], "rival": js["rival_id"],
+    # v7: lectura simple + carga calculada de los dos + cada evento en una frase
+    from ft_news import contexto as _ctx
+    cfg_l = config.leer_config(conn)
+    lectura = _lectura(conn, e, cfg_l)
+    for lista in (usados, vigentes["jugador_x_id"], vigentes["rival_id"]):
+        for d in lista:
+            d["categoria_es"] = explicar.categoria_es(d.get("categoria"))
+            d["texto_simple"] = explicar.evento_simple(d, js["jugador_x_id"]["nombre"] if d.get("jugador_id") == e["jugador_x_id"] else js["rival_id"]["nombre"])
+            d["estado_es"] = explicar.ESTADOS.get(d.get("estado"), d.get("estado"))
+    carga = {"x": _ctx.carga_de(conn, e["jugador_x_id"], e["partido_id"]), "rival": _ctx.carga_de(conn, e["rival_id"], e["partido_id"])}
+    e["motivo_simple"] = explicar.motivo_simple(e.get("motivo"))
+    e["dicho_motivo_simple"] = explicar.motivo_simple(e.get("dicho_motivo")) if e.get("dicho_motivo") else None
+    e.pop("lectura_json", None)
+    return {"evaluacion": e, "partido": p, "jugador_x": js["jugador_x_id"], "rival": js["rival_id"], "lectura": lectura, "carga": carga,
             "eventos_usados": usados, "vigentes_x": vigentes["jugador_x_id"], "vigentes_rival": vigentes["rival_id"],
             "cuotas": _pt.observaciones(conn, e["partido_id"]) if e.get("partido_id") else [],
             "alertas": al, "frescura": {"x": fres["jugador_x_id"], "rival": fres["rival_id"]},
@@ -377,6 +418,9 @@ def memoria_get(jugador_id: int, conn=Depends(_conn)):
     for ev in hist:
         ev["origen"] = ev.get("origen") or ("EXTERNO" if ev.get("articulo_id") else "INTERNO")
         ev["cambios"] = memoria.historial_cambios(conn, ev["id"])
+        ev["categoria_es"] = explicar.categoria_es(ev.get("categoria"))
+        ev["texto_simple"] = explicar.evento_simple(ev, (dict(j) if j else {}).get("nombre"))
+        ev["estado_es"] = explicar.ESTADOS.get(ev.get("estado"), ev.get("estado"))
     alertas_j = alertas.listar(conn, 50)
     alertas_j = [a for a in alertas_j if a.get("jugador_id") == jugador_id or a.get("rival_id") == jugador_id]
     partidos_j = [dict(r) for r in conn.execute(
@@ -387,8 +431,11 @@ def memoria_get(jugador_id: int, conn=Depends(_conn)):
     busquedas = [dict(r) for r in conn.execute(
         "SELECT consulta, idioma, resultados, creado_en FROM news_busqueda WHERE jugador_id=? ORDER BY id DESC LIMIT 20",
         (jugador_id,)).fetchall()]
+    from ft_news import contexto as _ctx
     return {"jugador_id": jugador_id, "jugador": dict(j) if j else None, "eventos": hist,
             "lectura": memoria.lectura_contextual(hist, jugador_id),
+            "lectura_simple": explicar.lectura_jugador([x for x in hist if x.get("jugador_id") == jugador_id], (dict(j) if j else {}).get("nombre") or ""),
+            "carga": _ctx.carga_de(conn, jugador_id),
             "estado_fisico_sin_verificar": memoria.estado_fisico_sin_verificar(hist, jugador_id),
             "alertas": alertas_j, "partidos": partidos_j, "busquedas": busquedas}
 
@@ -438,8 +485,10 @@ def diagnostico_get(conn=Depends(_conn), dias: int = 7):
     cfg = config.leer_config(conn)
     reintentos = q("SELECT resultado, COUNT(*) n FROM news_articulo WHERE resultado IN ('PENDIENTE','ERROR','FUERA_DE_ESQUEMA','AGOTADO') "
                    "GROUP BY resultado")
+    from ft_news import diagnostico_carga
     return {"dias": dias, "busquedas": busq, "busquedas_por_circuito": busq_circuito, "articulos": arts,
             "cobertura": cobertura.por_circuito(conn, cfg, dias=dias), "reintentos": reintentos,
+            "carga": diagnostico_carga.reglas(conn, cfg, dias=max(dias, 30)),
             "articulos_por_origen": arts_origen, "fuentes": fuentes_usadas, "descartados": descartados,
             "eventos": eventos, "hoy": {"externos": externos_hoy, "internos": internos_hoy},
             "costos_por_proveedor": costos_prov, "cola": cola, "errores": errores, "pasos": pasos,

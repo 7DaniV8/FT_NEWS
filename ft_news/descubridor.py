@@ -36,7 +36,7 @@ from ft_news import bandas as bd
 from ft_news import taxonomia as tx
 from ft_news.config import cortes_bandas
 
-VERSION_MOTOR = "news-descubridor-v3-experimental"
+VERSION_MOTOR = "news-descubridor-v4-claro"
 _RANGO_NIVEL = {"A": 3, "B": 2, "C": 1}
 FUENTE_INTERNA = "rankingftr.interno"
 
@@ -49,6 +49,22 @@ def es_externo(e: dict) -> bool:
     if e.get("articulo_id"):
         return True
     return str(e.get("fuente") or "") != FUENTE_INTERNA and not str(e.get("enlace") or "").startswith("contexto:")
+
+
+def sin_repetidos(eventos: list[dict]) -> list[dict]:
+    """v7 (Rubén: "una misma condición no se contabiliza varias veces"): un
+    evento calculado por categoría (queda el más nuevo) y un evento externo por
+    artículo (o por categoría + resumen si no tiene artículo)."""
+    vistos: dict = {}
+    for e in sorted(eventos, key=lambda x: x.get("id") or 0, reverse=True):
+        if es_externo(e):
+            clave = ("EXT", e.get("articulo_id") or (e.get("categoria"), (e.get("resumen_es") or "").strip().lower()))
+        else:
+            clave = ("INT", e.get("categoria"))
+        if clave in vistos:
+            continue
+        vistos[clave] = e
+    return sorted(vistos.values(), key=lambda x: x.get("id") or 0)
 
 
 def _dt(s):
@@ -111,6 +127,7 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
             inicio_partido: Optional[str] = None,
             fuego_hoy: int = 0, ya_avisado: bool = False) -> dict:
     ahora = ahora or datetime.now(timezone.utc)
+    eventos_x, eventos_rival = sin_repetidos(eventos_x or []), sin_repetidos(eventos_rival or [])
     cortes = cortes_bandas(cfg)
     calibradas = bool(cfg.get("NEWS_BANDAS_CALIBRADAS"))
     experimental = bool(cfg.get("NEWS_EXPERIMENTAL_ACTIVO", 1))

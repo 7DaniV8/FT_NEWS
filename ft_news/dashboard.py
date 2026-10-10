@@ -83,7 +83,9 @@ def picks(conn, genero: str = "", limite: int = 500) -> list[dict]:
         out.append({"id": r["id"], "fecha": r["dicho_en"] or r["creado_en"], "partido": f"{r['jx']} vs {r['jr']}",
                     "seleccion": sel, "etiqueta": "🔥", "torneo": r["torneo"], "cuota": cuota, "resultado": res,
                     "marcador": (r["score"] or "") + (" (ret.)" if r["retiro"] else ""),
-                    "detalle": f"nivel {r['nivel']} · noticia {('negativa' if contra_x else 'positiva')} para {r['jx']}",
+                    # v7: en palabras (nada de "nivel B")
+                    "detalle": (f"La noticia {'perjudica a' if contra_x else 'favorece a'} {r['jx']}"
+                                f" · {({'A': 'hecho confirmado', 'B': 'fuente fiable', 'C': 'sin confirmar'}).get(r['nivel'] or '', 'evidencia s/d')}"),
                     "unidades": None if res == PENDIENTE else _r((cuota - 1) if (res == GANADO and cuota) else -1.0)})
     return out[:limite] if limite else out
 

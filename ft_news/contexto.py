@@ -27,8 +27,12 @@ from ft_news import memoria
 from ft_news.db import ahora_iso, ejecutar_con_reintento
 
 FUENTE = "rankingftr.interno"
-UMBRAL_PARTIDOS_7D = 4           # ≥ 4 partidos en 7 días → CARGA_FISICA
-UMBRAL_TRES_SETS_7D = 3          # ≥ 3 partidos a 3+ sets en 7 días → CARGA_FISICA
+# v7 (10/10/2026, Rubén: "3 partidos y 9 sets en 7 días es normal"): la carga se
+# CLASIFICA (NORMAL / CONSIDERABLE / EXCEPCIONAL / INACTIVIDAD / SIN_DATOS) con
+# umbrales provisorios de config; solo CONSIDERABLE y EXCEPCIONAL dejan un
+# evento, uno solo vigente por jugador, y ninguno decide una 🔥 por sí solo.
+CLASES_CARGA = ("SIN_DATOS", "INACTIVIDAD", "NORMAL", "CONSIDERABLE", "EXCEPCIONAL")
+VERSION_CARGA = "carga-news-v7-20261010"
 UMBRAL_VIAJE_DIAS = 3            # cambió de país con ≤ 3 días entre partidos → VIAJE_CALENDARIO
 UMBRAL_ANTECEDENTES_MIN = 5      # mínimo de partidos en el torneo para opinar
 UMBRAL_ANTECEDENTE_BUENO = 0.70
@@ -72,14 +76,76 @@ def indexar_historial(filas: list[dict]) -> dict:
     return idx
 
 
+def _games(score: str) -> int:
+    """'6-4 3-6 7-6(5)' → 32 games. Sin estimar nada: lo que dice el marcador."""
+    n = 0
+    for p in re.split(r"[\s,]+", score or ""):
+        m = re.match(r"^(\d+)-(\d+)", p)
+        if m:
+            n += int(m.group(1)) + int(m.group(2))
+    return n
+
+
 def carga(partidos: list[dict], ahora: datetime) -> dict:
+    """Hechos de los últimos 3/7/14 días (sin duración: nunca se estima)."""
+    d3 = [p for p in partidos if _dt(p["fecha"]) and _dt(p["fecha"]) >= ahora - timedelta(days=3)]
     d7 = [p for p in partidos if _dt(p["fecha"]) and _dt(p["fecha"]) >= ahora - timedelta(days=7)]
     d14 = [p for p in partidos if _dt(p["fecha"]) and _dt(p["fecha"]) >= ahora - timedelta(days=14)]
     ultimo = partidos[-1] if partidos else None
     hace = (ahora - _dt(ultimo["fecha"])).days if ultimo and _dt(ultimo["fecha"]) else None
-    return {"partidos_7d": len(d7), "partidos_14d": len(d14), "tres_sets_7d": sum(1 for p in d7 if p["sets"] >= 3),
-            "sets_7d": sum(p["sets"] for p in d7), "ultimo_hace_dias": hace,
-            "ultimo_tres_sets": bool(ultimo and ultimo["sets"] >= 3), "duracion": None}
+    dias3: dict = {}
+    for p in d3:
+        dias3[str(p["fecha"])[:10]] = dias3.get(str(p["fecha"])[:10], 0) + 1
+    return {"partidos_3d": len(d3), "partidos_7d": len(d7), "partidos_14d": len(d14),
+            "tres_sets_7d": sum(1 for p in d7 if p["sets"] >= 3), "sets_7d": sum(p["sets"] for p in d7),
+            "games_7d": sum(_games(p.get("score")) for p in d7), "doble_jornada": int(any(v >= 2 for v in dias3.values())),
+            "ultimo_hace_dias": hace, "ultimo_tres_sets": bool(ultimo and ultimo["sets"] >= 3),
+            "ultimo_retiro": bool(ultimo and ultimo.get("retiro")), "partidos_historial": len(partidos),
+            "duracion": None, "version": VERSION_CARGA}
+
+
+def clasificar_carga(c: dict, cfg: dict) -> str:
+    """PUERTA 1 (misma filosofía que Cuota Mal Puesta V3): clase por la carga
+    ABSOLUTA del jugador. Umbrales provisorios de config."""
+    g = lambda k, d: int(cfg.get(k, d) or d)  # noqa: E731
+    if not c.get("partidos_historial"):
+        return "SIN_DATOS"
+    hace = c.get("ultimo_hace_dias")
+    if hace is None or hace >= g("NEWS_CARGA_INACTIVIDAD_DIAS", 10):
+        return "INACTIVIDAD"
+    if c["partidos_7d"] >= g("NEWS_CARGA_EXCEPCIONAL_PARTIDOS_7D", 6) or c["tres_sets_7d"] >= g("NEWS_CARGA_EXCEPCIONAL_TRES_SETS_7D", 5):
+        return "EXCEPCIONAL"
+    # 3 partidos en 3 días es el camino normal de un cuadro (una ronda por día): no cuenta solo.
+    if (c["partidos_7d"] >= g("NEWS_CARGA_CONSIDERABLE_PARTIDOS_7D", 5) or c["tres_sets_7d"] >= g("NEWS_CARGA_CONSIDERABLE_TRES_SETS_7D", 4)
+            or c.get("doble_jornada")):
+        return "CONSIDERABLE"
+    return "NORMAL"
+
+
+def describir_carga(c: dict, nombre: str) -> str:
+    """🟡 CARGA FÍSICA en una frase para el usuario (sin códigos)."""
+    clase = c.get("clase") or "SIN_DATOS"
+    if clase == "SIN_DATOS":
+        return f"Sin partidos recientes registrados de {nombre}: no se puede medir su carga."
+    if clase == "INACTIVIDAD":
+        return f"{nombre} lleva {c.get('ultimo_hace_dias')} días sin competir. Llega descansado, pero puede faltarle ritmo."
+    hechos = f"{nombre} disputó {c['partidos_7d']} partido(s) y {c['sets_7d']} sets en 7 días"
+    extras = []
+    if c.get("tres_sets_7d"):
+        extras.append(f"{c['tres_sets_7d']} a tres sets")
+    if c.get("partidos_3d", 0) >= 3:
+        extras.append(f"{c['partidos_3d']} en los últimos 3 días")
+    if c.get("doble_jornada"):
+        extras.append("doble jornada")
+    if c.get("ultimo_retiro"):
+        extras.append("se retiró en su último partido")
+    if extras:
+        hechos += " (" + ", ".join(extras) + ")"
+    if clase == "NORMAL":
+        return hechos + ". No hay evidencia suficiente para considerarlo fatigado."
+    if clase == "CONSIDERABLE":
+        return hechos + ". Es una carga considerable: se investiga si hay molestias, pero por sí sola no lo perjudica."
+    return hechos + ". Es una carga excepcional para una semana: podría pesar en el partido; se investiga."
 
 
 def viaje(partidos: list[dict], pais_torneo: Optional[str], fecha_partido: Optional[datetime]) -> dict:
@@ -108,11 +174,33 @@ def _guardar_contexto(conn, jugador_id: int, partido_id: int, clave: str, valor:
     ejecutar_con_reintento(_w, conn=conn)
 
 
+def _vigente_interno(conn, jugador_id: int, categoria: str):
+    """El evento calculado (origen interno) VIGENTE de esa categoría para el
+    jugador, si hay. v7: uno solo por jugador y categoría (no uno por partido)."""
+    return conn.execute(
+        "SELECT id, enlace, resumen_es, direccion FROM news_evento WHERE jugador_id=? AND categoria=? AND fuente=? "
+        "AND estado IN ('VIGENTE','EN_SEGUIMIENTO') ORDER BY id DESC LIMIT 1", (jugador_id, categoria, FUENTE)).fetchone()
+
+
 def _evento_contexto(conn, jugador_id: int, partido_id: int, categoria: str, direccion: str, resumen: str,
                      fecha: datetime, estimado: bool = False) -> Optional[int]:
     enlace = f"contexto:{partido_id}"
     if conn.execute("SELECT 1 FROM news_evento WHERE jugador_id=? AND categoria=? AND enlace=?",
                     (jugador_id, categoria, enlace)).fetchone():
+        return None
+    # v7 (Rubén: "una misma condición no se muestra cuatro veces"): si ya hay uno
+    # VIGENTE de la misma categoría calculada (otro fixture del mismo partido, la
+    # ronda siguiente), se actualiza ese en vez de crear otro.
+    prev = _vigente_interno(conn, jugador_id, categoria)
+    if prev:
+        texto = resumen + (" (estimado)" if estimado else "")
+        if prev["resumen_es"] != texto or prev["direccion"] != direccion:
+            def _u():
+                conn.execute("UPDATE news_evento SET resumen_es=?, direccion=?, enlace=?, actualizado_en=? WHERE id=?",
+                             (texto, direccion, enlace, ahora_iso(), prev["id"]))
+                memoria.anotar_historial(conn, prev["id"], "ACTUALIZADO", f"recalculado para el partido {partido_id}: {texto[:200]}")
+                conn.commit()
+            ejecutar_con_reintento(_u, conn=conn)
         return None
     ev = memoria.nuevo_evento(jugador_id, categoria, direccion, "HECHO", "A", fecha.isoformat(), fuente=FUENTE,
                               enlace=enlace, resumen_es=resumen + (" (estimado)" if estimado else ""),
@@ -120,21 +208,63 @@ def _evento_contexto(conn, jugador_id: int, partido_id: int, categoria: str, dir
     return memoria.guardar_evento_db(conn, ev)
 
 
+def _vencer_interno(conn, jugador_id: int, categoria: str, detalle: str) -> int:
+    """Vence TODOS los eventos calculados vigentes de esa categoría (p. ej. la
+    carga volvió a NORMAL, o quedaron duplicados de versiones anteriores)."""
+    n = 0
+    for f in conn.execute("SELECT id FROM news_evento WHERE jugador_id=? AND categoria=? AND fuente=? "
+                          "AND estado IN ('VIGENTE','EN_SEGUIMIENTO')", (jugador_id, categoria, FUENTE)).fetchall():
+        if memoria.cambiar_estado_db(conn, f["id"], "VENCIDO", detalle):
+            n += 1
+    return n
+
+
+def dedupe_internos(conn) -> int:
+    """v7, una vez por ciclo: si un jugador tiene más de un evento calculado
+    VIGENTE de la misma categoría (versiones anteriores creaban uno por fixture),
+    queda el más nuevo y el resto vence. Devuelve cuántos venció."""
+    n = 0
+    filas = conn.execute("SELECT jugador_id, categoria, COUNT(*) c, MAX(id) ultimo FROM news_evento WHERE fuente=? "
+                         "AND estado IN ('VIGENTE','EN_SEGUIMIENTO') GROUP BY jugador_id, categoria HAVING c > 1", (FUENTE,)).fetchall()
+    for f in filas:
+        for e in conn.execute("SELECT id FROM news_evento WHERE jugador_id=? AND categoria=? AND fuente=? AND id<>? "
+                              "AND estado IN ('VIGENTE','EN_SEGUIMIENTO')", (f["jugador_id"], f["categoria"], FUENTE, f["ultimo"])).fetchall():
+            if memoria.cambiar_estado_db(conn, e["id"], "VENCIDO", "duplicado de la misma condición calculada (v7)"):
+                n += 1
+    return n
+
+
 def evaluar_jugador(conn, j: dict, p: dict, hist: dict, defensa_idx: dict, cliente, ahora: datetime,
-                    paises_torneo: dict) -> dict:
+                    paises_torneo: dict, cfg: Optional[dict] = None) -> dict:
     """Motor 3 para un jugador en un partido. Devuelve lo calculado y los eventos creados."""
     out = {"eventos": []}
     partidos = hist.get(j["nombre_norm"], [])
     fecha_p = _dt(p.get("fecha_estimada"))
-    # carga
+    # carga (v7: por clases; NORMAL / INACTIVIDAD / SIN_DATOS no dejan evento)
     c = carga(partidos, ahora)
+    c["clase"] = clasificar_carga(c, cfg or {})
+    c["texto"] = describir_carga(c, j.get("nombre") or "El jugador")
     _guardar_contexto(conn, j["id"], p["id"], "CARGA", c, False, FUENTE)
-    if c["partidos_7d"] >= UMBRAL_PARTIDOS_7D or c["tres_sets_7d"] >= UMBRAL_TRES_SETS_7D:
-        eid = _evento_contexto(conn, j["id"], p["id"], "CARGA_FISICA", "NEGATIVA",
-                               f"{c['partidos_7d']} partidos y {c['sets_7d']} sets en 7 días; último hace {c['ultimo_hace_dias']} día(s)",
-                               ahora)
+    out["carga"] = c
+    if c["clase"] in ("CONSIDERABLE", "EXCEPCIONAL"):
+        resumen = (f"{c['partidos_7d']} partidos y {c['sets_7d']} sets en 7 días"
+                   + (f", {c['tres_sets_7d']} a tres sets" if c.get("tres_sets_7d") else "")
+                   + (f", {c['partidos_3d']} en 3 días" if c.get("partidos_3d", 0) >= 2 else "")
+                   + (", doble jornada" if c.get("doble_jornada") else "")
+                   + f"; último hace {c['ultimo_hace_dias']} día(s) · carga {c['clase'].lower()}")
+        # CONSIDERABLE = seguimiento (dirección MIXTA: no empuja la lectura); EXCEPCIONAL = negativa.
+        eid = _evento_contexto(conn, j["id"], p["id"], "CARGA_FISICA", "NEGATIVA" if c["clase"] == "EXCEPCIONAL" else "MIXTA",
+                               resumen, ahora)
         if eid:
             out["eventos"].append(("CARGA_FISICA", eid))
+        # se investiga (Rubén: "una carga verdaderamente excepcional sí pueda ser investigada")
+        try:
+            from ft_news import alertas as _al
+            _al.adelantar(conn, j["id"], ahora, motivo=f"CARGA_{c['clase']}")
+        except Exception:
+            pass
+    else:
+        _vencer_interno(conn, j["id"], "CARGA_FISICA", f"la carga volvió a {c['clase'].lower()} (v7)")
     # viaje
     pais_t = paises_torneo.get(jg.normalizar(p.get("torneo") or ""))
     v = viaje(partidos, pais_t, fecha_p)
@@ -211,13 +341,39 @@ def correr(conn, cliente, cfg: dict, ahora: Optional[datetime] = None, dias_hist
         defensa_idx = {jg.normalizar(d["nombre"]): d for d in (cliente.defensa() or {}).get("jugadores") or []}
     except Exception:
         defensa_idx = {}
-    res = {"partidos": 0, "eventos": 0, "historial": len(filas), "defensa": len(defensa_idx)}
+    res = {"partidos": 0, "eventos": 0, "historial": len(filas), "defensa": len(defensa_idx),
+           "duplicados_vencidos": dedupe_internos(conn), "carga": {c: 0 for c in CLASES_CARGA}}
     for p in pm.proximos(conn, ahora, int(cfg.get("NEWS_VENTANA_PARTIDO_HORAS", 72))):
         res["partidos"] += 1
         for jid in (p["jugador1_id"], p["jugador2_id"]):
             j = conn.execute("SELECT * FROM news_jugador WHERE id=?", (jid,)).fetchone()
             if not j:
                 continue
-            r = evaluar_jugador(conn, dict(j), p, hist, defensa_idx, cliente, ahora, paises)
+            r = evaluar_jugador(conn, dict(j), p, hist, defensa_idx, cliente, ahora, paises, cfg)
             res["eventos"] += len(r["eventos"])
+            if r.get("carga"):
+                res["carga"][r["carga"]["clase"]] = res["carga"].get(r["carga"]["clase"], 0) + 1
     return res
+
+
+def carga_de(conn, jugador_id: int, partido_id: Optional[int] = None) -> Optional[dict]:
+    """La carga calculada guardada para ese jugador (del partido dado o la última)."""
+    if partido_id:
+        r = conn.execute("SELECT valor_json FROM news_contexto WHERE jugador_id=? AND partido_id=? AND clave='CARGA'",
+                         (jugador_id, partido_id)).fetchone()
+    else:
+        r = None
+    if not r:
+        r = conn.execute("SELECT valor_json FROM news_contexto WHERE jugador_id=? AND clave='CARGA' ORDER BY id DESC LIMIT 1",
+                         (jugador_id,)).fetchone()
+    if not r:
+        return None
+    try:
+        c = json.loads(r["valor_json"] or "{}")
+    except (TypeError, ValueError):
+        return None
+    if "clase" not in c:                                   # fila de versiones anteriores
+        c.setdefault("partidos_3d", 0)
+        c.setdefault("partidos_historial", 1 if c.get("partidos_7d") or c.get("partidos_14d") else 0)
+        c["clase"] = clasificar_carga(c, {})
+    return c

@@ -1,16 +1,18 @@
-# 📰 FT NEWS v6 — Despliegue, contratos, variables y migraciones (10/10/2026)
+# 📰 FT NEWS v7 — Despliegue, contratos, variables y migraciones (10/10/2026)
 
 Complementa `DESPLIEGUE-HOY.md` (08/10, primer despliegue). Esto es lo que
-cambia al subir v6 + FT_INTELLIGENCE v18 + RankingFTR v38 + **FT Discord v11**.
+cambia al subir **v7** + FT_INTELLIGENCE v19 + RankingFTR **v39** + **FT Discord v11**.
+
+> v7 (10/10 madrugada): carga física por clases (una semana normal no es fatiga; un solo evento por jugador) y toda la pestaña en palabras simples. Detalle en `CAMBIOS-20261010-carga-y-claro-v7.md`. Migración: `news_evaluacion.lectura_json` (automática). Variables nuevas opcionales: `NEWS_CARGA_*` (ver §2).
 
 ## 1. Versiones que van juntas y qué habla con qué
 
 | Servicio | Versión | Habla con | Contrato probado por |
 |---|---|---|---|
-| FT_NEWS | `ft-news-v6-20261010` | lee RankingFTR `/ft-intel/utr/padron`, `/fixtures`, `/historial`, `/antecedentes`, `/defensa`, `/news/calibracion` | `tests/test_recorrido_fase1.py` (RankingFTR simulado con el formato real) |
-| FT Intelligence | v18 (`news.py` v2) | lee FT_NEWS `GET /news/senales`, escribe `POST /news/senales/dicho` | **`tests/test_contrato_ft_news.py`** (app real de FT_NEWS) · 7 OK |
-| FT Intelligence | v18 | lee RankingFTR `/ft-intel/*` | `tests/test_contrato_rankingftr.py` (router real de RankingFTR v38) · 26 OK |
-| RankingFTR | v38 | lee FT_NEWS `/news/estado`, `/hoy`, `/alertas`, `/diagnostico`, `/jugadores/buscar`, `/jugadores/{id}/memoria`, `/revision`, `/config`, `/fuentes`, `/excel` (proxies admin) | `tests/test_news_fase0.py` (sin FT_NEWS_URL lo dicen, no rompen) |
+| FT_NEWS | `ft-news-v7-20261010` | lee RankingFTR `/ft-intel/utr/padron`, `/fixtures`, `/historial`, `/antecedentes`, `/defensa`, `/news/calibracion` | `tests/test_recorrido_fase1.py` (RankingFTR simulado con el formato real) |
+| FT Intelligence | v19 (`news.py` v2) | lee FT_NEWS `GET /news/senales`, escribe `POST /news/senales/dicho` | **`tests/test_contrato_ft_news.py`** (app real de FT_NEWS) · 7 OK |
+| FT Intelligence | v19 | lee RankingFTR `/ft-intel/*` | `tests/test_contrato_rankingftr.py` (router real de RankingFTR v39) · 26 OK |
+| RankingFTR | v39 | lee FT_NEWS `/news/estado`, `/hoy`, `/alertas`, `/diagnostico`, `/jugadores/buscar`, `/jugadores/{id}/memoria`, `/revision`, `/config`, `/fuentes`, `/excel` (proxies admin) | `tests/test_news_fase0.py` (sin FT_NEWS_URL lo dicen, no rompen) |
 | FT Discord | **v11** (las tres de FT NEWS de fábrica) | lee FT Intelligence `/senales`, `/discord-config` | **`herramientas/recorrido_discord.py`** (anunciador real) |
 
 Orden sugerido: **FT_NEWS → FT Intelligence → RankingFTR**. Un FT Intelligence
@@ -31,6 +33,7 @@ sin los paneles nuevos.
 | `NEWS_EXPERIMENTAL_ACTIVO` | 1 | la 🔥 experimental viaja (cuando Discord esté encendido). |
 | `NEWS_EXP_MIN_PUNTOS` / `NEWS_EXP_MOV_CUOTA_PCT` | 2 / 3.0 | justificación mínima de la 🔥 experimental. |
 | `NEWS_SENAL_MAX_HORAS` | 12 | pendientes más viejas vencen (no hay avalancha al encender). |
+| `NEWS_CARGA_CONSIDERABLE_PARTIDOS_7D` / `…_TRES_SETS_7D` / `NEWS_CARGA_EXCEPCIONAL_PARTIDOS_7D` / `…_TRES_SETS_7D` / `NEWS_CARGA_INACTIVIDAD_DIAS` | 5 / 4 / 6 / 5 / 10 | **v7**, provisorios: clases de carga física. Se fijan con `/news/diagnostico` → `carga` (distribución) después de 24–48 h. |
 | `NEWS_RADAR_TEMATICO_*`, `NEWS_RADAR_CUPO_MENORES_PCT`, `NEWS_RIVAL_HORAS` | 1·12·6 / 40 / 48 | radar temático, cupo menores, frescura del rival. |
 
 Todo lo anterior son parámetros de `config.PARAMETROS`: se pueden fijar como
@@ -56,6 +59,7 @@ COLUMN` (idempotente; no toca datos):
 | tabla `news_evento_historial` | cambios de estado de cada evento |
 | `news_partido.cuota_proveedor` | de quién es la cuota vigente |
 | `news_articulo.resultado/motivo/jugador_id/origen/intentos/reintentar_en` | diagnóstico y reintentos |
+| `news_evaluacion.lectura_json` | **v7**: la lectura simple de cada evaluación |
 | `news_busqueda.origen`, `news_evento.origen` | radar / temático / rss · EXTERNO / INTERNO |
 
 Una sola vez (estado `fusion_duplicados_en`): `partidos.fusionar_duplicados`
@@ -70,14 +74,14 @@ se interpretan por `fuente`/`enlace` (los de contexto son INTERNO).
 1. Bajar copia de `/data/ft_news.db`.
 2. Regenerar `GEMINI_API_KEY` (punto 2) y revocar la vieja.
 3. Poner `NEWS_DISCORD_ACTIVO=0` y `NEWS_BANDAS_AUTO=0` en la pestaña si estaban en 1.
-4. Subir FT_NEWS v5.1 → esperar un ciclo (15 min) → `/news/estado` debe decir
-   `version: ft-news-v6-20261010`, `paso_fusion_duplicados`, `paso_reintentos`,
+4. Subir FT_NEWS v7 → esperar un ciclo (15 min) → `/news/estado` debe decir
+   `version: ft-news-v7-20261010`, `paso_fusion_duplicados`, `paso_reintentos`,
    `paso_alertas_vencidas` en `estado`. **Discord ya está encendido** en FT_NEWS:
    si se prefiere verificar primero con Discord apagado, poner
    `NEWS_DISCORD_ACTIVO=0` en la pestaña antes de este paso.
-5. Subir FT Intelligence v18 → en sus logs, feed `news` cada 60 s.
-6. Subir RankingFTR v38 → Admin → FT NEWS: paneles Alertas / Buscar jugador /
-   Diagnóstico (con cobertura por circuito y presupuesto). Admin → Discord →
+5. Subir FT Intelligence v19 → en sus logs, feed `news` cada 60 s.
+6. Subir RankingFTR v39 → Admin → FT NEWS: paneles Alertas / Buscar jugador /
+   Diagnóstico (con cobertura por circuito, presupuesto y 🏃 reglas de carga); tabla Hoy y modal en palabras. Admin → Discord →
    grupo FT NEWS: las tres en texto + voz.
 7. Subir FT Discord v11.
 8. **Verificar con noticias y cuotas reales** (lo que Rubén pidió antes de

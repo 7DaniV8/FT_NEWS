@@ -79,7 +79,7 @@ def main() -> int:
 
     print("\n2 · FT NEWS")
     sal = get(news_url, "/salud", {}) or {}
-    linea(OK if str(sal.get("version", "")).startswith("ft-news-v6") else WARN, f"versión {sal.get('version')} (se espera ft-news-v6-…)")
+    linea(OK if str(sal.get("version", "")).startswith("ft-news-v7") else WARN, f"versión {sal.get('version')} (se espera ft-news-v7-…)")
     est = get(news_url, "/news/estado", hn) or {}
     e = est.get("estado") or {}
     linea(OK if est.get("activo") else BAD, f"motor {'encendido' if est.get('activo') else 'APAGADO'} · Discord {'ENCENDIDO' if est.get('discord_activo') else 'apagado'}")

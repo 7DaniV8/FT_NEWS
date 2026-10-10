@@ -101,6 +101,15 @@ PARAMETROS = (
     ("NEWS_BANDA_CUOTA_FAV", 1.75, "float", "cuota ≤ esto → FAVORITO."),
     ("NEWS_BANDA_CUOTA_PAREJO", 2.30, "float", "cuota ≤ esto → PAREJO."),
     ("NEWS_BANDA_CUOTA_NO_FAV", 3.50, "float", "cuota ≤ esto → NO_FAVORITO; más → MUY_NO_FAVORITO."),
+    # v7 (10/10/2026, Rubén): carga física por CLASES. Umbrales PROVISORIOS hasta
+    # fijarlos con la distribución histórica (/news/diagnostico → carga). Una
+    # semana normal de competición no es fatiga; la inactividad se guarda, no se
+    # penaliza; la carga calculada NUNCA decide una 🔥 sola.
+    ("NEWS_CARGA_CONSIDERABLE_PARTIDOS_7D", 5, "int", "≥ N partidos en 7 días → carga CONSIDERABLE (seguimiento, se investiga; no perjudica sola)."),
+    ("NEWS_CARGA_CONSIDERABLE_TRES_SETS_7D", 4, "int", "≥ N partidos a 3+ sets en 7 días → CONSIDERABLE."),
+    ("NEWS_CARGA_EXCEPCIONAL_PARTIDOS_7D", 6, "int", "≥ N partidos en 7 días → carga EXCEPCIONAL (evento negativo; igual no da 🔥 sola)."),
+    ("NEWS_CARGA_EXCEPCIONAL_TRES_SETS_7D", 5, "int", "≥ N partidos a 3+ sets en 7 días → EXCEPCIONAL."),
+    ("NEWS_CARGA_INACTIVIDAD_DIAS", 10, "int", "≥ N días sin competir → INACTIVIDAD (se guarda y se informa; sin ventaja ni castigo)."),
     ("NEWS_IDIOMAS", "en,es,it,fr,pt", "str", "Idiomas de búsqueda (Fase 1)."),
     ("NEWS_CIRCUITOS", "atp,wta,challenger,wta125,itf,utr", "str", "Circuitos dentro del proyecto."),
 )

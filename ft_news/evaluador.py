@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from ft_news import alertas, descubridor, memoria, partidos, textos
+from ft_news import alertas, contexto, descubridor, explicar, memoria, partidos, textos
 from ft_news.db import ahora_iso, ejecutar_con_reintento
 
 
@@ -99,11 +99,22 @@ def evaluar_partido(conn, cfg: dict, p: dict, ahora: datetime) -> Optional[dict]
                 jid = jx["id"] if n == jx["nombre"] else jr["id"]
                 alertas.adelantar(conn, jid, ahora)
     usados = [e for e in ex + er if e.get("id") in (r.get("eventos_usados") or [])] or ex or er
+    usados = descubridor.sin_repetidos(usados)
     try:
         t = textos.armar(r, p, jx, jr, usados)
     except ValueError as e:
         r.update(tipo_alerta="INTERESANTE", motivo="TEXTO_PROHIBIDO", conclusion=str(e))
         t = {"texto": "", "voz": ""}
+    # v7 (Rubén): la lectura en palabras simples de la evaluación. Para lo que
+    # no es 🔥, ese es el texto de la evaluación (PARTIDO EN ANÁLISIS); el
+    # mensaje 🔥 definitivo lo sigue armando textos.py.
+    try:
+        r["lectura"] = explicar.evaluacion(r, p, jx, jr, usados, contexto.carga_de(conn, jx["id"], p["id"]),
+                                           contexto.carga_de(conn, jr["id"], p["id"]), cfg, r.get("justificacion"))
+        if r["tipo_alerta"] not in FUEGOS and not textos.hay_prohibido(r["lectura"]["texto"]):
+            t = {"texto": r["lectura"]["texto"], "voz": t.get("voz") or ""}
+    except Exception as e:                           # pragma: no cover — la lectura nunca tumba la evaluación
+        r["lectura"] = {"texto": "", "lineas": [], "resumen": f"sin lectura ({e})", "motivo": explicar.motivo_simple(r.get("motivo"))}
     eid = _guardar(conn, p, jx, jr, r, t, usados, prev, ahora)
     # v5: lo que va a Discord lo decide alertas.py (selección, dedupe, topes, motivo).
     try:
@@ -132,7 +143,7 @@ def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> Optional[int]:
             p.get("cuota_en"), r.get("banda_utr"), r.get("banda_mercado"), des.get("tipo"), r.get("direccion_neta"),
             r.get("nivel"), int(r.get("modo_evidencia") == "FUERTE"), r.get("conclusion"), tipo, motivo,
             t["texto"], t["voz"], int(r.get("bandas_calibradas") or 0), r.get("version_motor"), p.get("fixture_id"),
-            dicho_motivo, ahora.isoformat())
+            dicho_motivo, json.dumps(r.get("lectura") or {}, ensure_ascii=False), ahora.isoformat())
 
     def _w():
         if prev:
@@ -141,14 +152,14 @@ def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> Optional[int]:
                 "delta_utr=?, utr_x_en=?, utr_rival_en=?, cuota_x=?, cuota_rival=?, cuota_en=?, banda_utr=?, banda_mercado=?, "
                 "desvio=?, direccion_neta=?, nivel=?, categoria_fuerte=?, conclusion=?, tipo_alerta=?, motivo=?, "
                 "texto_discord=?, texto_voz=?, bandas_calibradas=?, version_motor=?, fixture_id=?, dicho_motivo=?, "
-                "actualizado_en=? WHERE id=?", vals + (prev["id"],))
+                "lectura_json=?, actualizado_en=? WHERE id=?", vals + (prev["id"],))
         else:
             conn.execute(
                 "INSERT INTO news_evaluacion (partido_id, jugador_x_id, rival_id, eventos_json, utr_x, utr_rival, delta_utr, "
                 "utr_x_en, utr_rival_en, cuota_x, cuota_rival, cuota_en, banda_utr, banda_mercado, desvio, direccion_neta, "
                 "nivel, categoria_fuerte, conclusion, tipo_alerta, motivo, texto_discord, texto_voz, bandas_calibradas, "
-                "version_motor, fixture_id, dicho_motivo, actualizado_en, creado_en) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals + (ahora_iso(),))
+                "version_motor, fixture_id, dicho_motivo, lectura_json, actualizado_en, creado_en) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals + (ahora_iso(),))
         conn.commit()
         return prev["id"] if prev else conn.execute("SELECT id FROM news_evaluacion WHERE partido_id=?", (p["id"],)).fetchone()[0]
     return ejecutar_con_reintento(_w, conn=conn)

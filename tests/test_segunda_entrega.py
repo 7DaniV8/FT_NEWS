@@ -82,26 +82,30 @@ def test_contexto_carga_viaje_localia_antecedentes_defensa(conn, cfg):
     lr = jg.buscar_por_nombre(conn, "Luca Rossi")
     cats_p = {e["categoria"]: e for e in memoria.historial_db(conn, jp["id"])}
     cats_r = {e["categoria"]: e for e in memoria.historial_db(conn, lr["id"])}
-    # Perez: 4 partidos en 7 días, 3 de ellos a 3 sets → CARGA; vino de Colombia hace 1 día → VIAJE; es peruano y juega en Perú → LOCALIA;
+    # Perez: 4 partidos en 7 días, 3 de ellos a 3 sets → v7 (Rubén 10/10): es una semana NORMAL de competición,
+    # NO deja evento de carga (antes sí); vino de Colombia hace 1 día → VIAJE; es peruano y juega en Perú → LOCALIA;
     # 4/5 ganados en Lima (80 %) → ANTECEDENTE positivo. Todo nivel A, fuente propia.
-    assert {"CARGA_FISICA", "VIAJE_CALENDARIO", "LOCALIA", "ANTECEDENTE_TORNEO"} <= set(cats_p)
+    assert {"VIAJE_CALENDARIO", "LOCALIA", "ANTECEDENTE_TORNEO"} <= set(cats_p) and "CARGA_FISICA" not in cats_p
     assert all(cats_p[k]["nivel"] == "A" and cats_p[k]["fuente"] == contexto.FUENTE for k in cats_p)
     assert cats_p["ANTECEDENTE_TORNEO"]["direccion"] == "POSITIVA" and "4/5" in cats_p["ANTECEDENTE_TORNEO"]["resumen_es"]
-    assert "3 sets" not in cats_p["CARGA_FISICA"]["resumen_es"] or True
     # Rossi: solo defensa de puntos (16 % ≥ 12 %) → PUNTOS_DEFENDIDOS mixta, estimado
     assert set(cats_r) == {"PUNTOS_DEFENDIDOS"} and cats_r["PUNTOS_DEFENDIDOS"]["direccion"] == "MIXTA"
     assert "(estimado)" in cats_r["PUNTOS_DEFENDIDOS"]["resumen_es"]
     # news_contexto guarda cada dato con fuente; la carga declara duracion NULL
     carga = json.loads(conn.execute("SELECT valor_json FROM news_contexto WHERE jugador_id=? AND clave='CARGA'", (jp["id"],)).fetchone()[0])
     assert carga["partidos_7d"] == 4 and carga["tres_sets_7d"] == 3 and carga["duracion"] is None
+    assert carga["clase"] == "NORMAL" and "No hay evidencia suficiente para considerarlo fatigado" in carga["texto"]
     # segunda pasada en la misma hora: no duplica eventos
     tareas.ciclo(conn, cliente=ftr, cfg=c, ahora=HOY + timedelta(minutes=15))
-    assert len(memoria.historial_db(conn, jp["id"])) == 4
-    # el descubridor con contexto: Perez (X) tiene CARGA (fuerte, negativa) + VIAJE (negativa) vs LOCALIA/ANTECEDENTE (positivas)
-    # → dirección por fuerza: hay fuerte negativa → NEGATIVA; con bandas calibradas y mercado alineado → 🔥 contra Perez
+    assert len(memoria.historial_db(conn, jp["id"])) == 3
+    # el descubridor con contexto: Perez (X) tiene VIAJE (negativa, débil) vs LOCALIA/ANTECEDENTE (positivas, débiles)
     e = conn.execute("SELECT * FROM news_evaluacion").fetchone()
-    # v5: con contexto propio solamente (carga, viaje, localía) NO hay 🔥: queda 🔎
-    assert e["tipo_alerta"] == "INTERESANTE" and e["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE" and e["direccion_neta"] == "NEGATIVA"
+    # v5: con contexto propio solamente (viaje, localía, antecedentes) NO hay 🔥: queda 🔎
+    assert e["tipo_alerta"] == "INTERESANTE" and e["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE" and e["direccion_neta"] == "POSITIVA"
+    # v7: la evaluación lleva su lectura simple y el texto es PARTIDO EN ANÁLISIS, sin códigos
+    lectura = json.loads(e["lectura_json"])
+    assert lectura["lineas"][0] == "🔎 FULLTENNIS · PARTIDO EN ANÁLISIS" and any(l.startswith("🧭 CONCLUSIÓN") for l in lectura["lineas"])
+    assert "SIN_NOTICIA_EXTERNA_FUERTE" not in e["texto_discord"] and "🎾 Juan Perez vs Luca Rossi" in e["texto_discord"]
 
 
 # ── Motor 5 ──────────────────────────────────────────────────────────────

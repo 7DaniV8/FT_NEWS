@@ -591,5 +591,12 @@ def listar(conn, limite: int = 100, tipo: Optional[str] = None) -> list[dict]:
             d["evidencia"] = json.loads(d.pop("evidencia_json") or "{}")
         except ValueError:
             d["evidencia"] = {}
+        # v7: por qué se seleccionó, en palabras; el técnico sigue en motivo_seleccion
+        try:
+            from ft_news import explicar
+            d["motivo_simple"] = explicar.alerta_simple(d)
+            d["dicho_motivo_simple"] = explicar.motivo_simple(d.get("dicho_motivo")) if d.get("dicho_motivo") else None
+        except Exception:                            # pragma: no cover
+            d["motivo_simple"], d["dicho_motivo_simple"] = d.get("motivo_seleccion"), d.get("dicho_motivo")
         out.append(d)
     return out

@@ -232,8 +232,13 @@ def test_contexto_interno_solo_no_da_interesante_ni_noticia(conn, cfg):
     gem, _ = _gem({})
     _ciclo(conn, c, tav, gem)
     assert alertas.listar(conn) == []
-    ev = conn.execute("SELECT tipo_alerta, motivo FROM news_evaluacion").fetchone()
-    assert ev["tipo_alerta"] == "INTERESANTE" and ev["motivo"] == "SIN_NOTICIA_EXTERNA_FUERTE"
+    # v7 (Rubén 10/10): el Motor 3 recalcula la carga de Perez → NORMAL → el evento
+    # de carga "3 partidos largos" VENCE ("la carga volvió a normal") y, sin nada
+    # más, no hay evaluación ni alerta. Si quedara vigente, seguiría siendo 🔎
+    # SIN_NOTICIA_EXTERNA_FUERTE (test_descubridor lo cubre).
+    e2 = conn.execute("SELECT estado FROM news_evento WHERE categoria='CARGA_FISICA'").fetchone()
+    assert e2["estado"] == "VENCIDO"
+    assert conn.execute("SELECT COUNT(*) FROM news_evaluacion WHERE tipo_alerta IN ('FUEGO','FUEGO_EXPERIMENTAL')").fetchone()[0] == 0
 
 
 # ── 🔥 EXPERIMENTAL ───────────────────────────────────────────────────────

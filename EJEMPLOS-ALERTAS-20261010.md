@@ -1,6 +1,6 @@
 # Recorrido FT NEWS → FT Intelligence → FT Discord (código real, fuentes simuladas)
 
-Generado 2026-10-10T04:28 UTC. Sin claves ni red: Tavily, el clasificador y RankingFTR
+Generado 2026-10-10T06:36 UTC. Sin claves ni red: Tavily, el clasificador y RankingFTR
 están simulados con el formato real de cada API; FT Intelligence y FT Discord corren con su código tal cual.
 
 ## FT NEWS
@@ -13,19 +13,70 @@ Búsquedas Tavily: 12 · llamadas al clasificador: 3
 ### Alertas seleccionadas (news_alerta)
 
 - **NOTICIA** · Mateo Quiroga vs Luca Bertolini · dicho_discord=1
-  - por qué: noticia externa LESION_MOLESTIA nivel B (hecho) de puntodebreak.com, hecho del 2026-10-08, identidad 0.95; próximo partido vs Luca Bertolini 2026-10-10T12:00
+  - por qué (usuario): Noticia importante confirmada (lesión o molestia) sobre Mateo Quiroga.
+  - por qué (técnico, admin): noticia externa LESION_MOLESTIA nivel B (hecho) de puntodebreak.com, hecho del 2026-10-08, identidad 0.95; próximo partido vs Luca Bertolini 2026-10-10T12:00
 - **NOTICIA** · Valentina Soler vs Hanna Kowal · dicho_discord=1
-  - por qué: noticia externa LESION_MOLESTIA nivel B (declaracion) de puntodebreak.com, hecho del 2026-10-08, identidad 0.92; próximo partido vs Hanna Kowal 2026-10-10T17:00
+  - por qué (usuario): Noticia importante confirmada (lesión o molestia) sobre Valentina Soler.
+  - por qué (técnico, admin): noticia externa LESION_MOLESTIA nivel B (declaracion) de puntodebreak.com, hecho del 2026-10-08, identidad 0.92; próximo partido vs Hanna Kowal 2026-10-10T17:00
 - **NOTICIA** · Tom Whitlock vs Nicolás Ferreyra · dicho_discord=1
-  - por qué: noticia externa RETIRO_ABANDONO nivel B (hecho) de tennistourtalk.com, hecho del 2026-10-09, identidad 0.97; próximo partido vs Nicolás Ferreyra 2026-10-11T11:00
+  - por qué (usuario): Noticia importante confirmada (retiro o abandono) sobre Tom Whitlock.
+  - por qué (técnico, admin): noticia externa RETIRO_ABANDONO nivel B (hecho) de tennistourtalk.com, hecho del 2026-10-09, identidad 0.97; próximo partido vs Nicolás Ferreyra 2026-10-11T11:00
 - **INTERESANTE** · Mateo Quiroga vs Luca Bertolini · dicho_discord=2 (SUPERADA_POR_FUEGO_EXPERIMENTAL)
-  - por qué: noticia externa LESION_MOLESTIA nivel B en Mateo Quiroga; Mateo Quiroga: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Luca Bertolini: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: CUOTA_SIN_ACTUALIZAR
+  - por qué (usuario): Noticia externa (lesión o molestia) y los dos jugadores investigados. Pendiente: ⏳ cuota actualizada después de la noticia (09/10 13:00 UTC); última cuota confirmada 09/10 11:00 UTC (FIXTURES_FTR) — pendiente de actualización.
+  - por qué (técnico, admin): noticia externa LESION_MOLESTIA nivel B en Mateo Quiroga; Mateo Quiroga: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Luca Bertolini: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: CUOTA_SIN_ACTUALIZAR
 - **INTERESANTE** · Valentina Soler vs Hanna Kowal · dicho_discord=1
-  - por qué: noticia externa LESION_MOLESTIA nivel B en Valentina Soler; Valentina Soler: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Hanna Kowal: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: CUOTA_SIN_ACTUALIZAR
+  - por qué (usuario): Noticia externa (lesión o molestia) y los dos jugadores investigados. Pendiente: ⏳ cuota actualizada después de la noticia (09/10 12:00 UTC); última cuota confirmada 09/10 11:00 UTC (FIXTURES_FTR) — pendiente de actualización; confirmar la declaración con un hecho u otra fuente.
+  - por qué (técnico, admin): noticia externa LESION_MOLESTIA nivel B en Valentina Soler; Valentina Soler: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Hanna Kowal: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: CUOTA_SIN_ACTUALIZAR
 - **INTERESANTE** · Tom Whitlock vs Nicolás Ferreyra · dicho_discord=1
-  - por qué: noticia externa RETIRO_ABANDONO nivel B en Tom Whitlock; Tom Whitlock: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Nicolás Ferreyra: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: RETIRO_MISMO_TORNEO
+  - por qué (usuario): Noticia externa (retiro o abandono) y los dos jugadores investigados. Pendiente: ⏳ cuota actualizada después de la noticia (09/10 14:00 UTC); última cuota confirmada 09/10 11:00 UTC (FIXTURES_FTR) — pendiente de actualización.
+  - por qué (técnico, admin): noticia externa RETIRO_ABANDONO nivel B en Tom Whitlock; Tom Whitlock: investigado hace 0.0 h (2 búsqueda(s), 1 artículo(s), 1 noticia(s) externa(s)); Nicolás Ferreyra: investigado hace 0.0 h (2 búsqueda(s), 0 artículo(s), 0 noticia(s) externa(s)); motivo del descubridor: RETIRO_MISMO_TORNEO
 - **FUEGO_EXPERIMENTAL** · Mateo Quiroga vs Luca Bertolini · dicho_discord=1
-  - por qué: EXPERIMENTAL (bandas sin validar): noticia externa LESION_MOLESTIA nivel B · UTR 12.85 vs 12.41 (FAVORITO) · mercado FAVORITO (1.42) · ALINEADO · lado CONTRA_X; explicaciones posibles: bandas UTR/cuota todavía sin validar con datos propios (señal experimental) · justificación: cuota confirmada después de la noticia (09/10 13:00 UTC): Mateo Quiroga sigue en 1.42 (antes 1.42; FIXTURES_FTR, 09/10 15:05 UTC): el mercado no reaccionó todavía; a favor: hecho reportado por prensa fiable (puntodebreak.com); circuito challenger: mercado menos líquido, suele tardar en incorporar noticias; en contra: banda UTR y mercado alineados: la ventaja, si existe, está solo en la noticia; balance +4 (mínimo 2)
+  - por qué (usuario): Noticia externa fuerte, UTR y cuota comparados: la cuota todavía no parece reflejar la noticia (lectura experimental).
+  - por qué (técnico, admin): EXPERIMENTAL (bandas sin validar): noticia externa LESION_MOLESTIA nivel B · UTR 12.85 vs 12.41 (FAVORITO) · mercado FAVORITO (1.42) · ALINEADO · lado CONTRA_X; explicaciones posibles: bandas UTR/cuota todavía sin validar con datos propios (señal experimental) · justificación: cuota confirmada después de la noticia (09/10 13:00 UTC): Mateo Quiroga sigue en 1.42 (antes 1.42; FIXTURES_FTR, 09/10 15:05 UTC): el mercado no reaccionó todavía; a favor: hecho reportado por prensa fiable (puntodebreak.com); circuito challenger: mercado menos líquido, suele tardar en incorporar noticias; en contra: banda UTR y mercado alineados: la ventaja, si existe, está solo en la noticia; balance +4 (mínimo 2)
+
+### Evaluaciones · lectura simple (v7, lo que ve el usuario)
+
+- evaluación #1 · técnico: FUEGO_EXPERIMENTAL / CONTRA_X
+```
+🔥 FULLTENNIS · POSIBLE VALOR EXPERIMENTAL
+🎾 Mateo Quiroga vs Luca Bertolini
+🏆 Challenger Lima
+📊 UTR: 12.85 vs 12.41
+💰 Quiroga 1.42 | Bertolini 2.85
+⚖️ NIVEL: Quiroga parte ligeramente por encima por UTR.
+🚨 NOTICIA: Quiroga — Molestias en el tobillo derecho.
+🔴 PERJUDICA A: Mateo Quiroga
+🟢 JUGADOR FAVORECIDO: LUCA BERTOLINI
+💰 CUOTA: 2.85
+🧭 CONCLUSIÓN: La noticia podría favorecer a Luca Bertolini y la cuota todavía no parece reflejarla. Lectura experimental, sin validar estadísticamente.
+```
+
+- evaluación #2 · técnico: INTERESANTE / MERCADO_EN_MOVIMIENTO
+```
+🔎 FULLTENNIS · PARTIDO EN ANÁLISIS
+🎾 Valentina Soler vs Hanna Kowal
+🏆 W75 Reus
+📊 UTR: 10.62 vs 10.20
+💰 Soler 1.80 | Kowal 2.00
+⚖️ NIVEL: Soler parte ligeramente por encima por UTR.
+🚨 NOTICIA: Soler — Molestias en el hombro.
+🔴 PERJUDICA A: Valentina Soler
+🟢 PODRÍA FAVORECER A: HANNA KOWAL @2.00
+🧭 CONCLUSIÓN: La cuota ya se está moviendo en la dirección de la noticia.
+```
+
+- evaluación #3 · técnico: INTERESANTE / RETIRO_MISMO_TORNEO
+```
+🔎 FULLTENNIS · PARTIDO EN ANÁLISIS
+🎾 Tom Whitlock vs Nicolás Ferreyra
+🏆 M25 Sevilla
+📊 UTR: 11.05 vs 11.30
+💰 Whitlock 1.90 | Ferreyra 1.90
+⚖️ NIVEL: Jugadores prácticamente igualados por UTR.
+🚨 NOTICIA: Whitlock — Se retiró del M25 de Sevilla por la muñeca.
+🧭 CONCLUSIÓN: El jugador se retiró en este mismo torneo: el partido podría no jugarse.
+```
+
 
 ## FT Intelligence
 
