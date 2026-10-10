@@ -246,3 +246,50 @@ def test_endpoints_con_lectura_y_diagnostico_de_carga(conn, cfg, monkeypatch):
         assert d["evaluaciones"]["con_carga"] == {"INTERESANTE": 1} and d["duplicados"]["evaluaciones_con_carga_repetida"] == 0
         assert d["distribucion"]["variables"]["partidos_7d"]["percentiles"]["n"] == 2
         assert "resultados_del_cargado" in d
+
+
+# ── 7 · dashboard: todo lo dicho en Discord, para siempre (Rubén 10/10 14:09) ──
+def test_dashboard_lista_todo_lo_dicho_y_apuesta_solo_las_fuego(conn, cfg):
+    from ft_news import dashboard
+    from ft_news.alertas import _insertar
+    fuentes.sembrar(conn, iniciales=["tennistourtalk.com"])
+    c = _cfg(cfg)
+    tareas.ciclo(conn, cliente=FTR(GEA_3_PARTIDOS), cfg=c, ahora=HOY)
+    gea, hum = jg.buscar_por_nombre(conn, "Arthur Gea"), jg.buscar_por_nombre(conn, "Ugo Humbert")
+    pid = conn.execute("SELECT id FROM news_partido").fetchone()[0]
+    conn.execute("INSERT INTO news_evaluacion (partido_id, jugador_x_id, rival_id, cuota_x, cuota_rival, tipo_alerta, motivo, "
+                 "direccion_neta, actualizado_en, creado_en) VALUES (?,?,?,2.01,1.79,'FUEGO_EXPERIMENTAL','CONTRA_X','NEGATIVA',?,?)",
+                 (pid, gea["id"], hum["id"], HOY.isoformat(), HOY.isoformat()))
+    eid = conn.execute("SELECT id FROM news_evaluacion").fetchone()[0]
+    conn.commit()
+    a1 = _insertar(conn, "NOTICIA", "NOTICIA:1", gea["id"], hum["id"], pid, None, [], "m", {},
+                   "📰 FULLTENNIS · NOTICIA IMPORTANTE\n🎾 Arthur Gea\n🚨 Lesión", "v", HOY)
+    a2 = _insertar(conn, "INTERESANTE", "INTERESANTE:1", gea["id"], hum["id"], pid, eid, [], "m", {"cuotas": {"x": 2.01, "rival": 1.79}},
+                   "🔎 FULLTENNIS · PARTIDO INTERESANTE\n🎾 Arthur Gea vs Ugo Humbert\n🟢 PODRÍA FAVORECER A: UGO HUMBERT @1.79\n⏳ Pendiente", "v", HOY)
+    a3 = _insertar(conn, "FUEGO_EXPERIMENTAL", "FUEGO_EXPERIMENTAL:1", gea["id"], hum["id"], pid, eid, [], "m", {},
+                   "🔥 FULLTENNIS · POSIBLE VALOR EXPERIMENTAL\n🎾 Ugo Humbert vs Arthur Gea\n🟢 JUGADOR FAVORECIDO: UGO HUMBERT\n💰 CUOTA: 1.79", "v", HOY)
+    a4 = _insertar(conn, "INTERESANTE", "INTERESANTE:2", gea["id"], hum["id"], pid, eid, [], "m", {}, "🔎 no dicha", "v", HOY)
+    assert dashboard.armar(conn)["kpis"]["alertas_dichas"] == 0
+    conn.execute("UPDATE news_alerta SET dicho_discord=1, dicho_en=? WHERE id IN (?,?,?)", (HOY.isoformat(), a1, a2, a3))
+    conn.execute("UPDATE news_alerta SET dicho_discord=2, dicho_motivo='omitida' WHERE id=?", (a4,))
+    conn.commit()
+    d = dashboard.armar(conn)
+    k, h = d["kpis"], d["historial"]
+    assert k["alertas_dichas"] == 3 and k["seguimiento"] == 2 and k["total"] == 1 and k["pendientes"] == 1   # apuestas = solo 🔥
+    assert {x["etiqueta"] for x in h} == {"📰", "🔎", "🔥 exp"}
+    fe = next(x for x in h if x["tipo"] == "FUEGO_EXPERIMENTAL")
+    assert fe["seleccion"] == "Ugo Humbert" and fe["cuota"] == 1.79 and fe["resultado"] == "pendiente"
+    it = next(x for x in h if x["tipo"] == "INTERESANTE")
+    assert it["seleccion"] == "Ugo Humbert" and it["cuota"] == 1.79 and it["resultado"] == "seguimiento" and it["unidades"] is None
+    assert next(x for x in h if x["tipo"] == "NOTICIA")["resultado"] == "seguimiento"
+    # resultado del partido: Humbert gana → la 🔥 exp ganada (+0.79), las otras siguen en seguimiento con el marcador
+    conn.execute("INSERT INTO news_resultado (evaluacion_id, ganador_id, retiro, score, cerrado_en) VALUES (?,?,0,'6-4 6-4',?)",
+                 (eid, hum["id"], HOY.isoformat()))
+    conn.commit()
+    d = dashboard.armar(conn)
+    assert d["kpis"]["ganadas"] == 1 and d["kpis"]["unidades"] == 0.79 and d["kpis"]["alertas_dichas"] == 3
+    assert next(x for x in d["historial"] if x["tipo"] == "INTERESANTE")["marcador"].startswith("ganó Ugo Humbert")
+    # nada se borra: la 🔥 exp sigue aunque la evaluación cambie de tipo después
+    conn.execute("UPDATE news_evaluacion SET tipo_alerta='INTERESANTE', motivo='MERCADO_YA_DESCONTO' WHERE id=?", (eid,))
+    conn.commit()
+    assert dashboard.armar(conn)["kpis"]["alertas_dichas"] == 3

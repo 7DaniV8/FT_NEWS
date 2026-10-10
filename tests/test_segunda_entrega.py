@@ -335,7 +335,7 @@ def test_dashboard_discord(conn, cfg, monkeypatch):
     d = dashboard.armar(conn)
     k = d["kpis"]
     assert k["ganadas"] == 1 and k["unidades"] == 1.9 and k["hit_rate"] == 100.0 and k["roi"] == 190.0
-    assert d["historial"][0]["unidades"] == 1.9 and "negativa para Juan Perez" in d["historial"][0]["detalle"]
+    assert d["historial"][0]["unidades"] == 1.9 and "perjudica a Juan Perez" in d["historial"][0]["detalle"]
     assert dashboard.armar(conn, genero="F")["kpis"]["total"] == 0
     monkeypatch.setattr(config, "NEWS_SECRET", "secreto-pruebas")
     monkeypatch.setattr("ft_news.config.DB_PATH", __import__("pathlib").Path(conn.execute("PRAGMA database_list").fetchone()[2]))

@@ -392,6 +392,11 @@ def test_endpoint_evaluacion_detalle_para_el_modal(conn, cfg, monkeypatch):
     e = _evaluacion(conn)
     monkeypatch.setattr(config, "NEWS_SECRET", "secreto-pruebas")
     monkeypatch.setattr("ft_news.config.DB_PATH", __import__("pathlib").Path(conn.execute("PRAGMA database_list").fetchone()[2]))
+    # el endpoint mide la frescura contra la hora REAL: las búsquedas simuladas en HOY se traen a ahora
+    _real = datetime.now(timezone.utc).isoformat()
+    conn.execute("UPDATE news_busqueda SET creado_en=?", (_real,))
+    conn.execute("UPDATE news_jugador_cola SET ultima_busqueda_en=?", (_real,))
+    conn.commit()
     with TestClient(app) as t:
         h = {"X-FT-News-Secret": "secreto-pruebas"}
         d = t.get(f"/news/evaluaciones/{e['id']}", headers=h).json()
