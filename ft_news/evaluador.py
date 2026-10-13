@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from ft_news import alertas, contexto, descubridor, explicar, memoria, partidos, textos
+from ft_news import alertas, contexto, descartes, descubridor, explicar, memoria, partidos, textos
 from ft_news.db import ahora_iso, ejecutar_con_reintento
 
 
@@ -78,6 +78,8 @@ def evaluar_partido(conn, cfg: dict, p: dict, ahora: datetime) -> Optional[dict]
         inicio_partido=p.get("fecha_estimada"), fuego_hoy=_fuego_hoy(conn, ahora),
         ya_avisado=_ya_avisado(conn, jx["id"], p.get("torneo"), p["id"]))
     r.update(utr_x=jx.get("utr_singles"), utr_rival=jr.get("utr_singles"), cuota_x=cuota_x, cuota_rival=cuota_r)
+    # v7.2: lo que dijo el descubridor ANTES de la justificación (para guardar por qué no fue 🔥)
+    tipo_desc, motivo_desc = r["tipo_alerta"], r.get("motivo")
     # v5.1: una 🔥 (experimental o validada) tiene que poder decir qué información
     # podría no estar en la cuota, qué hay en contra y por qué merece la alerta;
     # si no alcanza, queda como 🔎 (Rubén, 09/10 noche).
@@ -124,7 +126,61 @@ def evaluar_partido(conn, cfg: dict, p: dict, ahora: datetime) -> Optional[dict]
             r["alerta"] = alertas.partido_interesante(conn, cfg, r, p, jx, jr, ex, er, eid, ahora)
     except Exception as e:                           # la alerta nunca tumba la evaluación
         r["alerta"] = {"alerta_id": None, "motivo": f"error: {e}"}
+    _guardar_descartes(conn, p, jx, jr, r, eid, tipo_desc, motivo_desc, ahora)
     return r
+
+
+def _guardar_descartes(conn, p: dict, jx: dict, jr: dict, r: dict, eid: Optional[int], tipo_desc: str,
+                       motivo_desc: Optional[str], ahora: datetime) -> None:
+    """v7.2 (13/10/2026, Rubén: "que el sistema guarde permanentemente los motivos de
+    descarte"): por qué este partido no fue 🔥 y, si tampoco salió como 🔎, por qué.
+    Un mismo partido puede quedar bloqueado por varias cosas a la vez (p. ej. rival sin
+    investigar Y cuota sin actualizar): se guarda cada una, para poder contarlas por
+    separado. Nunca cambia la decisión."""
+    vistos: set = set()
+
+    def _reg(etapa, motivo, detalle="", grupo_forzado=None):
+        g = grupo_forzado or descartes.grupo(motivo)
+        if (etapa, g) in vistos:                     # una vez por ciclo: `veces` = ciclos que lo vieron
+            return
+        vistos.add((etapa, g))
+        descartes.registrar(conn, etapa, motivo, detalle=detalle, grupo_forzado=grupo_forzado, **kw)
+
+    try:
+        kw = dict(ahora=ahora, partido_id=p["id"], jugador_id=jx["id"], rival_id=jr["id"], evaluacion_id=eid)
+        alerta = r.get("alerta") or {}
+        tipo = r.get("tipo_alerta")
+        # 🔥: ¿por qué no llegó a serlo?
+        if tipo_desc not in FUEGOS:
+            if motivo_desc not in ("PARTIDO_EMPEZADO", "SIN_EVENTOS"):
+                _reg("FUEGO", motivo_desc, r.get("conclusion") or "")
+        elif tipo not in FUEGOS:                     # el descubridor dijo 🔥 y la justificación lo bajó a 🔎
+            j = r.get("justificacion") or {}
+            _reg("FUEGO", j.get("motivo") or r.get("motivo"), "; ".join(j.get("en_contra") or [])[:500])
+            if j.get("sin_fresca"):
+                _reg("FUEGO", "RIVAL_SIN_INVESTIGACION_RECIENTE", ", ".join(j["sin_fresca"]), "RIVAL_SIN_INVESTIGAR")
+            if j.get("cuota_pendiente"):
+                _reg("FUEGO", "CUOTA_SIN_ACTUALIZAR", j["cuota_pendiente"], "CUOTA_SIN_ACTUALIZAR")
+        # lo que finalmente no viajó a Discord
+        if not alerta.get("alerta_id"):
+            etapa = "FUEGO" if tipo in FUEGOS else "INTERESANTE"
+            mot = alerta.get("motivo")
+            if tipo == "NADA":
+                mot = r.get("motivo") if r.get("motivo") not in ("PARTIDO_EMPEZADO", "SIN_EVENTOS") else None
+            if mot not in descartes.NO_ES_DESCARTE:
+                _reg(etapa, mot, r.get("conclusion") or "")
+            resumen = (f"NO ENVIADA · {descartes.grupo(mot)} ({mot})" if mot and mot not in descartes.NO_ES_DESCARTE
+                       else f"NO ENVIADA · {descartes.grupo(r.get('motivo'))} ({r.get('motivo')})")
+        else:
+            resumen = f"ALERTA #{alerta['alerta_id']} ({tipo})"
+        if eid:
+            def _w():
+                conn.execute("UPDATE news_evaluacion SET alerta_motivo=? WHERE id=?", (resumen[:300], eid))
+                conn.commit()
+            ejecutar_con_reintento(_w, conn=conn)
+    except Exception as e:                           # pragma: no cover — la memoria nunca tumba la evaluación
+        import logging
+        logging.getLogger("ft_news").warning("[FT_NEWS] descartes del partido %s: %s", p.get("id"), e)
 
 
 def _guardar(conn, p, jx, jr, r, t, usados, prev, ahora) -> Optional[int]:

@@ -36,6 +36,9 @@ Diseño aprobado: *FT NEWS INTELLIGENCE — Diseño definitivo (v2)* (documento 
 | `ft_news/cliente_rankingftr.py` | lectura de `/ft-intel/*` (padrón UTR, fixtures, partidos, calibración) | listo, no se llama con `NEWS_ACTIVO=0` |
 | `ft_news/tareas.py` | worker cada 15 min: padrón → calibración → partidos (+ fusión de duplicados una vez) → vencimientos → contexto → radar → temático (cada 6 h) → RSS → descubridor → cierre → costos; apagado no llama a nadie | listo |
 | `ft_news/app.py` | API: `/salud`, `/news/estado`, `/news/config`, `/news/fuentes(+/autorizar)`, `/news/senales(+/dicho)`, `/news/hoy`, `/news/revision(+/{id})`, `/news/evaluaciones/{id}/interesante`, `/news/excel`, `/news/costos`, `/news/jugadores/{id}/memoria`; v5: `/news/alertas`, `/news/diagnostico`, `/news/jugadores/buscar?q=`; v6.1: `/news/evaluaciones/{id}`; **v7**: cada evaluación, evento y alerta viaja con su `lectura` / `texto_simple` / `motivo_simple` | listo |
+| `ft_news/descartes.py` | **v7.2**: motivos de descarte PERMANENTES (`news_descarte`), agrupados y en palabras; `embudo()` responde por día las seis preguntas de Rubén (externas, descartes, rival sin investigar, cuota sin actualizar, entrega, bandas); guardia de bandas sin veredicto | listo |
+| `ft_news/salud.py` | **v7.2**: semáforo 🟢 FUNCIONANDO / 🟡 SIN DATOS / 🔴 ERROR con motivos e indicadores; `/news/salud`, `/news/embudo`, `/news/prueba` (PRUEBA real de Discord, fuera de historial y estadísticas) | listo |
+| `herramientas/diagnostico_alertas.py` | **v7.2**: diagnóstico de solo lectura sobre la base real (reconstruye el embudo de antes de v7.2) | listo |
 | `herramientas/calibrar_bandas.py` | informe de calibración contra RankingFTR (HTTP) o un `.db` | listo |
 
 ## Variables de Railway

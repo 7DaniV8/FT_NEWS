@@ -150,6 +150,26 @@ def _retiro_del_torneo(evento: dict, torneo: str) -> bool:
         f"{evento.get('titular') or ''} {evento.get('resumen_es') or ''}"))
 
 
+def fiabilidad(e: dict) -> str:
+    """v7.3 (13/10/2026, Rubén: "las noticias no verificadas no se presenten como hechos
+    confirmados"): una línea que dice de dónde viene la noticia y si está confirmada.
+    Solo presentación: no cambia qué sale ni qué no."""
+    if not e:
+        return ""
+    fuente = str(e.get("fuente") or "")
+    if fuente == "rankingftr.interno" or str(e.get("enlace") or "").startswith("contexto:") or e.get("origen") == "INTERNO":
+        return "📊 Dato calculado por FullTennis (no es una noticia de prensa)."
+    f = _fuente_corta(fuente)
+    nat, nivel = e.get("naturaleza"), str(e.get("nivel") or "C")
+    if nat == "HECHO" and nivel == "A":
+        return f"✅ Confirmado por fuente oficial ({f})."
+    if nat == "HECHO":
+        return f"📰 Informado por {f}; sin confirmación oficial."
+    if nat == "DECLARACION":
+        return f"🗣️ Según declaraciones recogidas por {f}; sin confirmación oficial."
+    return f"❔ Sin confirmar ({f})."
+
+
 def _verificar(texto: str, voz: str) -> dict:
     if hay_prohibido(texto) or hay_prohibido(voz):
         raise ValueError("El texto contiene algo prohibido (porcentaje / probabilidad / apostar / enlace).")
@@ -171,7 +191,7 @@ def armar_noticia(evento: dict, jugador: dict, prox: Optional[dict], motivo_sele
     rival = (prox or {}).get("rival")
     torneo = _torneo(prox) or jugador.get("ultimo_torneo") or ""
     lineas = [ENCABEZADOS["NOTICIA"], f"🎾 {nombre}", f"🏆 {torneo or 'Sin partido programado'}",
-              f"📊 UTR: {_utr(jugador.get('utr_singles'))}", f"🚨 {cat}: {_frase(evento)}"]
+              f"📊 UTR: {_utr(jugador.get('utr_singles'))}", f"🚨 {cat}: {_frase(evento)}", fiabilidad(evento)]
     voz_fav = ""
     wo = bool(prox) and _retiro_del_torneo(evento, _torneo(prox))
     if direccion == "NEGATIVA":
@@ -225,6 +245,8 @@ def armar_interesante(ev: dict, partido: dict, jx: dict, jr: dict, fx: list[dict
     quien = apellido(x) if fx else apellido(r)
     frase = _frase(primero) if primero else "Contexto relevante."
     lineas.append(f"🚨 NOTICIA: {frase}")
+    if primero:
+        lineas.append(fiabilidad(primero))
     fav, cuota = _favorecido_interesante(jx, jr, ev, fx, fr)
     if str(ev.get("motivo") or "") in ("RETIRO_MISMO_TORNEO", "DIRECCION_CONTRADICTORIA"):
         fav, cuota = None, None                      # el partido puede no jugarse / noticias en los dos: no se inventa
@@ -269,7 +291,9 @@ def armar(ev: dict, partido: dict, jugador_x: dict, rival: dict, eventos: list[d
               f"📊 UTR: {_utr(ev.get('utr_rival') if contra else ev.get('utr_x'))} vs {_utr(ev.get('utr_x') if contra else ev.get('utr_rival'))}",
               f"🟢 JUGADOR FAVORECIDO: {_mayus(fav)}",
               f"💰 CUOTA: {_cuota(cuota_fav)}",
-              f"🚨 MOTIVO: {_frase(primero) if primero else 'Noticia externa verificada.'}"]
+              f"🚨 MOTIVO: {_frase(primero) if primero else 'Noticia externa.'}"]
+    if primero:
+        lineas.append(fiabilidad(primero))
     j = ev.get("justificacion") or {}
     ca, cd = j.get("cuota_x_antes"), j.get("cuota_x_despues")
     if cd is not None and ca is not None:

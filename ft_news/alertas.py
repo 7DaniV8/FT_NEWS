@@ -532,6 +532,8 @@ def pendientes(conn, cfg: dict, limite: int = 50) -> list[dict]:
     tipos.append("FUEGO")
     if cfg.get("NEWS_EXPERIMENTAL_ACTIVO", 1):
         tipos.append("FUEGO_EXPERIMENTAL")
+    if cfg.get("NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA", 0):
+        tipos.append("PRUEBA")                  # v7.3: solo con el destino de admin verificado
     q = ("SELECT a.*, jx.nombre AS jugador_x, jr.nombre AS rival, p.torneo, p.fecha_estimada, p.genero, p.circuito, "
          "p.fixture_id, p.cuota1, p.cuota2, p.jugador1_id FROM news_alerta a "
          "LEFT JOIN news_jugador jx ON jx.id=a.jugador_id LEFT JOIN news_jugador jr ON jr.id=a.rival_id "
@@ -541,6 +543,10 @@ def pendientes(conn, cfg: dict, limite: int = 50) -> list[dict]:
     for r in conn.execute(q, (*tipos, limite)).fetchall():
         d = dict(r)
         d["tipo_alerta"] = d["tipo"]
+        if d["tipo"] == "PRUEBA":
+            # viaja con el formato de 📰 (el tipo que FT Intelligence ya conoce) y la marca prueba=1
+            d["tipo_alerta"], d["prueba"] = "NOTICIA", 1
+            d["solo_admin"], d["destino"] = True, "ADMIN"     # nunca al canal de la comunidad
         d["motivo"] = d.get("motivo_seleccion")
         try:
             ev = json.loads(d.get("evidencia_json") or "{}")
@@ -576,9 +582,12 @@ def marcar_dichas(conn, avisos: list[dict]) -> int:
 
 
 def listar(conn, limite: int = 100, tipo: Optional[str] = None) -> list[dict]:
-    w, args = "", []
-    if tipo:
-        w, args = "WHERE a.tipo=?", [tipo]
+    # v7.2: las PRUEBA no son alertas: solo aparecen si se piden explícitamente
+    w, args = "WHERE COALESCE(a.prueba,0)=0", []
+    if tipo == "PRUEBA":
+        w, args = "WHERE a.tipo='PRUEBA'", []
+    elif tipo:
+        w, args = "WHERE COALESCE(a.prueba,0)=0 AND a.tipo=?", [tipo]
     out = []
     for r in conn.execute(
             "SELECT a.*, jx.nombre AS jugador, jr.nombre AS rival, p.torneo, p.fecha_estimada, p.estado AS partido_estado, "
@@ -591,6 +600,8 @@ def listar(conn, limite: int = 100, tipo: Optional[str] = None) -> list[dict]:
             d["evidencia"] = json.loads(d.pop("evidencia_json") or "{}")
         except ValueError:
             d["evidencia"] = {}
+        # v7.3: recorrido de cada alerta (creada → recibida → publicada), sin dar por publicada lo no confirmado
+        d["recorrido"] = pasos_alerta(d)
         # v7: por qué se seleccionó, en palabras; el técnico sigue en motivo_seleccion
         try:
             from ft_news import explicar
@@ -600,3 +611,151 @@ def listar(conn, limite: int = 100, tipo: Optional[str] = None) -> list[dict]:
             d["motivo_simple"], d["dicho_motivo_simple"] = d.get("motivo_seleccion"), d.get("dicho_motivo")
         out.append(d)
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════
+# v7.2 (13/10/2026) — Prueba REAL de Discord, solo administradores
+# ═════════════════════════════════════════════════════════════════════
+
+PRUEBA_ENCABEZADO = "🧪 PRUEBA DE FT NEWS — NO ES UNA OPORTUNIDAD"
+PRUEBA_BLOQUEADA = ("La prueba de Discord está bloqueada hasta comprobar que FT Intelligence y FT Discord la "
+                    "mandan solo al canal de administradores y no a la comunidad.")
+
+
+def crear_prueba(conn, por: str = "", ahora: Optional[datetime] = None, cfg: Optional[dict] = None) -> dict:
+    """Deja en la cola de FT Intelligence una alerta marcada PRUEBA (tipo PRUEBA,
+    prueba=1, solo_admin). Viaja con el formato de 📰 NOTICIA y su texto lo dice en la
+    primera línea. No cuenta en historial, dashboard, topes ni estadísticas.
+    v7.3: bloqueada mientras NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA=0 (no se sabe todavía
+    si FT Intelligence / FT Discord la mandarían a la comunidad)."""
+    from ft_news import config as _config
+    cfg = cfg or _config.leer_config(conn)
+    if not int(cfg.get("NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA", 0)):
+        raise PermissionError(PRUEBA_BLOQUEADA)
+    ahora = ahora or datetime.now(timezone.utc)
+    prev = conn.execute("SELECT id FROM news_alerta WHERE tipo='PRUEBA' AND dicho_discord=0 ORDER BY id DESC LIMIT 1").fetchone()
+    if prev:
+        r = estado_prueba(conn, prev["id"], ahora)
+        r["aviso"] = "Ya había una prueba en curso: se sigue esa."
+        return r
+    quien = (por or "admin").strip()[:60]
+    hora = ahora.strftime("%d/%m/%Y %H:%M")
+    texto = (f"{PRUEBA_ENCABEZADO}\n"
+             f"Mensaje de comprobación pedido por {quien} el {hora} UTC.\n"
+             f"Recorrido: FT NEWS → FT Intelligence → FT Discord.\n"
+             f"Ignorar: no hay ningún partido ni cuota detrás de este mensaje.")
+    voz = "Prueba de FT NEWS. No es una oportunidad."
+    if textos.hay_prohibido(texto):                       # pragma: no cover — defensa
+        raise ValueError("texto de prueba con palabras prohibidas")
+
+    def _w():
+        cur = conn.execute(
+            "INSERT INTO news_alerta (tipo, clave, jugador_id, rival_id, partido_id, evaluacion_id, evento_ids_json, "
+            "motivo_seleccion, evidencia_json, texto_discord, texto_voz, dicho_discord, prueba, creado_en, actualizado_en) "
+            "VALUES ('PRUEBA', ?, NULL, NULL, NULL, NULL, '[]', ?, ?, ?, ?, 0, 1, ?, ?)",
+            (f"PRUEBA:{ahora.isoformat()}", f"PRUEBA pedida por {quien}",
+             json.dumps({"prueba": True, "por": quien}), texto, voz, ahora.isoformat(), ahora.isoformat()))
+        conn.commit()
+        return cur.lastrowid
+    pid = ejecutar_con_reintento(_w, conn=conn)
+    return estado_prueba(conn, pid, ahora)
+
+
+def registrar_entrega(conn, ids: list, ahora: Optional[datetime] = None) -> None:
+    """Paso 2: FT Intelligence recogió estas alertas de /news/senales."""
+    if not ids:
+        return
+    ts = (ahora or datetime.now(timezone.utc)).isoformat()
+
+    def _w():
+        conn.executemany("UPDATE news_alerta SET entregada_en=COALESCE(entregada_en, ?), entregas=entregas+1 WHERE id=?",
+                         [(ts, i) for i in ids])
+        conn.commit()
+    ejecutar_con_reintento(_w, conn=conn)
+
+
+def registrar_publicacion(conn, avisos: list[dict]) -> int:
+    """Paso 3: lo que informe FT Intelligence sobre la publicación real en FT Discord.
+    Cada aviso puede traer `publicado` (true/false), `publicado_en` y `canal` o `error`.
+    Sin `publicado`, la publicación queda SIN CONFIRMAR (nunca se da por hecha)."""
+    ahora = ahora_iso()
+    filas = [(1 if a["publicado"] else 0, a.get("publicado_en") or ahora,
+              str(a.get("canal") or a.get("error") or "")[:300],
+              str(a.get("canal") or "")[:120] or None, str(a.get("error") or "")[:300] or None, a.get("id"))
+             for a in avisos if a.get("id") is not None and a.get("publicado") is not None]
+    if not filas:
+        return 0
+
+    def _w():
+        n = conn.executemany("UPDATE news_alerta SET publicado=?, publicado_en=?, publicado_detalle=?, publicado_canal=?, "
+                             "publicado_error=? WHERE id=?", filas).rowcount
+        conn.commit()
+        return n
+    return ejecutar_con_reintento(_w, conn=conn)
+
+
+def pasos_alerta(d: dict, leida_en: Optional[str] = None, ahora: Optional[datetime] = None) -> dict:
+    """Los tres pasos de una alerta, en palabras, sin códigos:
+       1 FT NEWS la creó · 2 FT Intelligence la recibió · 3 FT Discord la publicó.
+    'Recibida' NUNCA se presenta como 'publicada'."""
+    ahora = ahora or datetime.now(timezone.utc)
+    ok, espera, falla = "✅", "⏳", "❌"
+    p1 = {"paso": 1, "nombre": "FT NEWS creó la alerta", "estado": ok, "en": d.get("creado_en"), "detalle": ""}
+    # No salir a propósito NO es un fallo: una 🔎 que reemplazó una 🔥 del mismo partido
+    if d.get("dicho_discord") == 2 and str(d.get("dicho_motivo") or "").startswith("SUPERADA") and not d.get("entregada_en"):
+        nuevo = "una 🔥 del mismo partido" if "FUEGO" in str(d.get("dicho_motivo")) else "una alerta más completa del mismo partido"
+        return {"estado": "REEMPLAZADA", "resumen": f"No se envió porque la reemplazó {nuevo}.",
+                "pasos": [p1, {"paso": 2, "nombre": "FT Intelligence la recibió", "estado": "➖", "en": d.get("dicho_en"),
+                               "detalle": f"Reemplazada por {nuevo} antes de salir."},
+                          {"paso": 3, "nombre": "FT Discord la publicó", "estado": "➖", "en": None, "detalle": "No correspondía."}]}
+    if d.get("entregada_en"):
+        p2 = {"paso": 2, "nombre": "FT Intelligence la recibió", "estado": ok, "en": d["entregada_en"], "detalle": ""}
+    elif d.get("dicho_discord") == 2:
+        p2 = {"paso": 2, "nombre": "FT Intelligence la recibió", "estado": falla, "en": d.get("dicho_en"),
+              "detalle": ("FT Intelligence nunca la recogió y venció." if d.get("dicho_motivo") == "VENCIDA"
+                          else f"Se descartó antes de llegar: {d.get('dicho_motivo') or 'sin motivo'}.")}
+    else:
+        p2 = {"paso": 2, "nombre": "FT Intelligence la recibió", "estado": espera, "en": None,
+              "detalle": "Esperando que FT Intelligence revise la cola"
+                         + (f" (la revisó por última vez el {str(leida_en)[:16].replace('T', ' ')} UTC)." if leida_en
+                            else " (no hay registro de que la haya revisado nunca).")}
+    canal = {"comunidad": "el canal de la comunidad", "admin": "el canal de administradores"}.get(
+        d.get("publicado_canal") or "", d.get("publicado_canal") or "")
+    if d.get("publicado") == 1:
+        p3 = {"paso": 3, "nombre": "FT Discord la publicó", "estado": ok, "en": d.get("publicado_en"),
+              "detalle": f"Publicada{(' en ' + canal) if canal else ''}."}
+    elif d.get("publicado") == 0:
+        p3 = {"paso": 3, "nombre": "FT Discord la publicó", "estado": falla, "en": d.get("publicado_en"),
+              "detalle": f"No se publicó: {d.get('publicado_error') or d.get('publicado_detalle') or 'sin detalle'}."}
+    elif d.get("dicho_discord") == 2 and d.get("entregada_en"):
+        p3 = {"paso": 3, "nombre": "FT Discord la publicó", "estado": falla, "en": d.get("dicho_en"),
+              "detalle": f"FT Intelligence la recibió pero no la pasó a Discord: {d.get('dicho_motivo') or 'sin motivo'}."}
+    elif d.get("dicho_discord") == 1:
+        p3 = {"paso": 3, "nombre": "FT Discord la publicó", "estado": espera, "en": None,
+              "detalle": "FT Intelligence dice que la procesó, pero FT Discord todavía no confirmó la publicación. "
+                         "No se da por publicada hasta que llegue esa confirmación (o la veas en el canal)."}
+    else:
+        p3 = {"paso": 3, "nombre": "FT Discord la publicó", "estado": espera, "en": None, "detalle": "Todavía no llegó a este paso."}
+    pasos = [p1, p2, p3]
+    fallo = next((x for x in pasos if x["estado"] == falla), None)
+    if fallo:
+        resumen = f"Falló en el paso {fallo['paso']} ({fallo['nombre'].lower()}): {fallo['detalle']}"
+        estado = "FALLO"
+    elif p3["estado"] == ok:
+        resumen, estado = "Recorrido completo: publicada en Discord.", "PUBLICADA"
+    elif p2["estado"] == ok:
+        resumen, estado = "Recibida por FT Intelligence; falta la confirmación de publicación de FT Discord.", "RECIBIDA"
+    else:
+        resumen, estado = "Creada; esperando que FT Intelligence la recoja.", "CREADA"
+    return {"estado": estado, "resumen": resumen, "pasos": pasos}
+
+
+def estado_prueba(conn, pid: int, ahora: Optional[datetime] = None) -> Optional[dict]:
+    r = conn.execute("SELECT * FROM news_alerta WHERE id=? AND tipo='PRUEBA'", (pid,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    leida = conn.execute("SELECT valor FROM news_estado WHERE clave='senales_leidas_en'").fetchone()
+    pa = pasos_alerta(d, leida["valor"] if leida else None, ahora)
+    return {"id": d["id"], "estado": pa["estado"], "resumen": pa["resumen"], "pasos": pa["pasos"],
+            "creada_en": d["creado_en"], "texto": d["texto_discord"]}

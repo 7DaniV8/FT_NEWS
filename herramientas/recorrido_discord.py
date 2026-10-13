@@ -190,12 +190,14 @@ def correr_ft_intelligence(ruta_repo: str, ft_news_app, tmp: Path, ahora: dateti
     cli = cliente_news(transport=httpx.MockTransport(h))
     r1 = news.sincronizar(conn, cli, ahora)
     r2 = news.sincronizar(conn, cli, ahora + timedelta(minutes=1))       # nada nuevo: no repite
-    tc.__exit__(None, None, None)
-    return {"conn": conn, "pasadas": [r1, r2], "senales": leer(conn)["senales"]}
+    # v7.3: el TestClient queda abierto: después de FT Discord, FT Intelligence le informa a FT
+    # NEWS la publicación real (acuse). correr_todo lo cierra.
+    return {"conn": conn, "pasadas": [r1, r2], "senales": leer(conn)["senales"], "cli": cli, "tc": tc}
 
 
 # ── 3. FT Discord (anunciador real, publicación capturada) ───────────────
-def correr_ft_discord(ruta_repo: str, conn_fti: sqlite3.Connection, ahora: datetime) -> dict:
+def correr_ft_discord(ruta_repo: str, conn_fti: sqlite3.Connection, ahora: datetime,
+                      canal_admin: bool = True) -> dict:
     sys.path.insert(0, ruta_repo)
     os.environ.setdefault("DISCORD_TOKEN", "x")
     os.environ.setdefault("FT_INTEL_URL", "https://ft-intel.test")
@@ -210,17 +212,26 @@ def correr_ft_discord(ruta_repo: str, conn_fti: sqlite3.Connection, ahora: datet
     async def h(req: httpx.Request):
         if req.url.path == "/discord-config":
             return httpx.Response(200, json=cfg_remota)
+        if req.url.path == "/senales/acuse":                  # v7.3: el acuse vuelve a FT Intelligence (código real)
+            import json as _json
+            from ft_intelligence.implicacion import guardar_acuses
+            acuses.extend(_json.loads(req.content)["acuses"])
+            return httpx.Response(200, json={"ok": True, "guardados": guardar_acuses(conn_fti, _json.loads(req.content)["acuses"])})
         desde = int(req.url.params.get("desde_id", 0))
         d = leer(conn_fti, desde)
         return httpx.Response(200, json=d)
-    publicados, voces = [], []
+    publicados, voces, admin, acuses = [], [], [], []
 
     async def publicar(texto):
         publicados.append(texto)
+
+    async def publicar_admin(texto):
+        admin.append(texto)
     fuente = Fuente("https://ft-intel.test", "s", transport=httpx.MockTransport(h))
     an = Anunciador(fuente, publicar, lambda v: voces.append(v) or True, "America/Bogota",
                     {"NEWS_VALOR", "NEWS_INTERESANTE", "NEWS_NOTICIA"}, {"NEWS_VALOR", "NEWS_NOTICIA"},
-                    max_antiguedad_min=60, reloj=lambda: ahora)
+                    max_antiguedad_min=60, reloj=lambda: ahora,
+                    **({"publicar_admin": publicar_admin} if canal_admin else {}))
 
     async def _go():
         await an.arrancar(0)                      # cursor en 0: lee todo lo que FT Intelligence tenga
@@ -229,18 +240,32 @@ def correr_ft_discord(ruta_repo: str, conn_fti: sqlite3.Connection, ahora: datet
         await fuente.cerrar()
         return r1, r2
     r1, r2 = asyncio.run(_go())
-    return {"ciclos": [dict(r1), dict(r2)], "publicados": publicados, "voces": voces}
+    return {"ciclos": [dict(r1), dict(r2)], "publicados": publicados, "voces": voces, "admin": admin, "acuses": acuses}
 
 
-def correr_todo(ruta_fti: str, ruta_disc: str) -> dict:
+def correr_todo(ruta_fti: str, ruta_disc: str, con_prueba: bool = False, canal_admin: bool = True) -> dict:
+    """Ida y vuelta: FT NEWS → FT Intelligence → FT Discord → (acuse) → FT Intelligence → FT NEWS.
+    con_prueba: además, la 🧪 PRUEBA de admin (debe salir SOLO por el canal de administradores).
+    canal_admin=False: FT Discord sin DISCORD_CANAL_ADMIN_ID (la prueba no debe salir por ningún lado)."""
     tmp = Path(tempfile.mkdtemp())
     n = correr_ft_news(tmp / "ft_news.db")
-    from ft_news.app import app
-    ahora = HOY + timedelta(minutes=16)
-    i = correr_ft_intelligence(ruta_fti, app, tmp, ahora)
-    d = correr_ft_discord(ruta_disc, i["conn"], ahora)
     from ft_news import alertas
-    return {"news": n, "intel": i, "discord": d, "alertas": alertas.listar(n["conn"])}
+    from ft_news.app import app
+    from ft_news.db import config_guardar
+    ahora = HOY + timedelta(minutes=16)
+    prueba = None
+    if con_prueba:
+        config_guardar(n["conn"], "NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA", "1", "recorrido")
+        prueba = alertas.crear_prueba(n["conn"], "recorrido", ahora=ahora)
+    i = correr_ft_intelligence(ruta_fti, app, tmp, ahora)
+    d = correr_ft_discord(ruta_disc, i["conn"], ahora, canal_admin=canal_admin)
+    from ft_intelligence import news as fti_news
+    vuelta = fti_news.reportar_publicaciones(i["conn"], i["cli"], ahora + timedelta(minutes=1))
+    vuelta2 = fti_news.reportar_publicaciones(i["conn"], i["cli"], ahora + timedelta(minutes=2))   # no repite
+    i["tc"].__exit__(None, None, None)
+    return {"news": n, "intel": i, "discord": d, "alertas": alertas.listar(n["conn"]),
+            "vuelta": [vuelta, vuelta2],
+            "prueba": alertas.estado_prueba(n["conn"], prueba["id"]) if prueba else None}
 
 
 def informe(r: dict) -> str:

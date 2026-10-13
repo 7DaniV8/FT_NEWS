@@ -23,8 +23,9 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from ft_news import VERSION, alertas, cobertura, config, costos, evaluador, explicar, fuentes, memoria, tareas
-from ft_news.db import config_guardar, estado_todo, get_conn
+from ft_news import VERSION, alertas, cobertura, config, costos, descartes, evaluador, explicar, fuentes, memoria, tareas
+from ft_news import salud as salud_mod
+from ft_news.db import config_guardar, estado_set, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
 _worker: Optional[tareas.Worker] = None
@@ -70,19 +71,22 @@ def estado(conn=Depends(_conn)):
     return {"version": VERSION, "fase": 1, "activo": bool(cfg["NEWS_ACTIVO"]),
             "bandas_calibradas": bool(cfg["NEWS_BANDAS_CALIBRADAS"]),
             "discord_activo": bool(cfg["NEWS_DISCORD_ACTIVO"]),
+            "prueba_desbloqueada": bool(cfg.get("NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA")),     # v7.3
             "fuentes": {"total": n("news_fuente"),
                         "autorizadas": conn.execute("SELECT COUNT(*) FROM news_fuente WHERE autorizada=1").fetchone()[0]},
             "contadores": {t: n(t) for t in ("news_jugador", "news_jugador_cola", "news_evento", "news_partido",
                                              "news_evaluacion", "news_revision", "news_alerta", "news_articulo")},
             "alertas": _alertas_resumen(conn),
-            "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
+            "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn),
+            # v7.2: semáforo FUNCIONANDO / SIN_DATOS / ERROR con sus motivos e indicadores
+            "salud": salud_mod.calcular(conn, cfg)}
 
 
 def _alertas_resumen(conn) -> dict:
     hoy = datetime.now(timezone.utc).date().isoformat()
     out = {"pendientes": {}, "dichas_hoy": {}, "omitidas_hoy": {}}
-    for r in conn.execute("SELECT tipo, dicho_discord, COUNT(*) n FROM news_alerta WHERE dicho_discord=0 OR creado_en>=? "
-                          "GROUP BY tipo, dicho_discord", (hoy,)).fetchall():
+    for r in conn.execute("SELECT tipo, dicho_discord, COUNT(*) n FROM news_alerta WHERE COALESCE(prueba,0)=0 "
+                          "AND (dicho_discord=0 OR creado_en>=?) GROUP BY tipo, dicho_discord", (hoy,)).fetchall():
         k = {0: "pendientes", 1: "dichas_hoy", 2: "omitidas_hoy"}[r["dicho_discord"]]
         out[k][r["tipo"]] = r["n"]
     return out
@@ -103,6 +107,14 @@ class ConfigIn(BaseModel):
 
 @app.post("/news/config", dependencies=[Depends(_auth)])
 def config_post(body: ConfigIn, conn=Depends(_conn)):
+    # v7.2: "bandas calibradas" no se puede encender a mano sin el veredicto que la respalde
+    if body.clave == "NEWS_BANDAS_CALIBRADAS" and config._convertir(body.clave, body.valor) == 1:
+        cfg = config.leer_config(conn)
+        ver = (estado_todo(conn).get("calibracion_veredicto") or {}).get("valor")
+        if int(cfg.get("NEWS_BANDAS_EXIGIR_VEREDICTO", 1)) and ver != "CALIBRADAS_OK":
+            raise HTTPException(status_code=409, detail=f"No se puede activar «bandas calibradas»: la calibración dice "
+                                                        f"{ver or 'sin veredicto'}. Se activa sola cuando el veredicto sea "
+                                                        f"CALIBRADAS_OK (o con NEWS_BANDAS_AUTO=1).")
     try:
         config_guardar(conn, body.clave, body.valor, body.por)
     except ValueError as e:
@@ -139,7 +151,10 @@ def senales(conn=Depends(_conn)):
     NEWS_DISCORD_ACTIVO=0. Cada fila: id, tipo_alerta, texto_discord, texto_voz,
     jugador_x, rival, torneo, fecha_estimada, fixture_id, motivo, conclusion."""
     cfg = config.leer_config(conn)
+    # v7.2: latido — prueba de que FT Intelligence está leyendo (aunque no haya nada que entregar)
+    estado_set(conn, "senales_leidas_en", datetime.now(timezone.utc).isoformat())
     if not cfg["NEWS_DISCORD_ACTIVO"]:
+        estado_set(conn, "senales_ultima_lectura", "0 señales (NEWS_DISCORD_ACTIVO=0)")
         return {"senales": [], "motivo": "NEWS_DISCORD_ACTIVO=0"}
     campos = ("id", "tipo_alerta", "motivo", "conclusion", "texto_discord", "texto_voz", "jugador_x", "rival", "torneo",
               "fecha_estimada", "genero", "circuito", "fixture_id", "cuota_x", "cuota_rival", "utr_x", "utr_rival",
@@ -149,7 +164,12 @@ def senales(conn=Depends(_conn)):
     for f in evaluador.senales(conn, cfg):
         d = {k: f.get(k) for k in campos}
         d["experimental"] = f.get("tipo_alerta") == "FUEGO_EXPERIMENTAL"
+        d["prueba"] = bool(f.get("prueba"))                                      # v7.2
+        if d["prueba"]:
+            d["solo_admin"], d["destino"] = True, "ADMIN"                        # v7.3
         out.append(d)
+    estado_set(conn, "senales_ultima_lectura", f"{len(out)} señal(es) entregada(s)")
+    alertas.registrar_entrega(conn, [d["id"] for d in out])                    # v7.3: paso 2
     return {"senales": out}
 
 
@@ -160,7 +180,53 @@ class DichoIn(BaseModel):
 @app.post("/news/senales/dicho", dependencies=[Depends(_auth)])
 def senales_dicho(body: DichoIn, conn=Depends(_conn)):
     """FT Intelligence informa qué pasó con cada señal: {id, dicho: bool, en, motivo}."""
-    return {"marcadas": evaluador.marcar_dichas(conn, body.avisos)}
+    estado_set(conn, "senales_dicho_en", datetime.now(timezone.utc).isoformat())           # v7.2: latido
+    # v7.3: si el aviso trae `publicado` (confirmación de FT Discord), es el paso 3; si no, queda sin confirmar
+    return {"marcadas": evaluador.marcar_dichas(conn, body.avisos),
+            "publicaciones": alertas.registrar_publicacion(conn, body.avisos)}
+
+
+# ═════════════════════════════════════════════════════════════════════
+# v7.2 (13/10/2026) — diagnóstico permanente y prueba de Discord
+# ═════════════════════════════════════════════════════════════════════
+
+@app.get("/news/salud", dependencies=[Depends(_auth)])
+def salud_get(conn=Depends(_conn)):
+    """Semáforo FUNCIONANDO / SIN_DATOS / ERROR con motivos e indicadores."""
+    return salud_mod.calcular(conn)
+
+
+@app.get("/news/embudo", dependencies=[Depends(_auth)])
+def embudo_get(conn=Depends(_conn), dias: int = 7):
+    """Las seis preguntas de Rubén, por día: noticias externas, descartes y motivo,
+    rival sin investigar, cuota sin actualizar, entrega a FT Intelligence y bandas."""
+    return {"salud": salud_mod.calcular(conn), "embudo": descartes.embudo(conn, max(1, min(int(dias), 60)))}
+
+
+class PruebaIn(BaseModel):
+    por: str = ""
+
+
+@app.post("/news/prueba", dependencies=[Depends(_auth)])
+def prueba_post(body: PruebaIn, conn=Depends(_conn)):
+    """Prueba REAL de Discord, solo para administradores (RankingFTR exige admin):
+    deja una alerta marcada PRUEBA en la cola que lee FT Intelligence. No cuenta en
+    el historial, el dashboard, los topes ni las estadísticas."""
+    cfg = config.leer_config(conn)
+    if not cfg["NEWS_DISCORD_ACTIVO"]:
+        raise HTTPException(status_code=409, detail="El envío a Discord está apagado: la prueba no saldría.")
+    try:
+        return alertas.crear_prueba(conn, body.por, cfg=cfg)
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/news/prueba/{pid}", dependencies=[Depends(_auth)])
+def prueba_get(pid: int, conn=Depends(_conn)):
+    r = alertas.estado_prueba(conn, pid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="No existe esa prueba")
+    return r
 
 
 @app.get("/news/revision", dependencies=[Depends(_auth)])

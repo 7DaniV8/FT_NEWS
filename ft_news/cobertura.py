@@ -65,7 +65,7 @@ def por_circuito(conn, cfg: dict, ahora: Optional[datetime] = None, dias: int = 
         f["evaluaciones"] += r["ev"]
     for r in conn.execute("SELECT a.tipo, COALESCE(p.circuito, j.circuito) circ FROM news_alerta a "
                           "LEFT JOIN news_partido p ON p.id=a.partido_id LEFT JOIN news_jugador j ON j.id=a.jugador_id "
-                          "WHERE a.creado_en>=?", (desde,)):
+                          "WHERE a.creado_en>=? AND COALESCE(a.prueba,0)=0", (desde,)):
         f = filas[_circ(r["circ"])]
         f["alertas"] += 1
         f["alertas_por_tipo"][r["tipo"]] = f["alertas_por_tipo"].get(r["tipo"], 0) + 1

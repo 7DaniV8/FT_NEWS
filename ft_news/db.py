@@ -308,6 +308,29 @@ CREATE TABLE IF NOT EXISTS news_costos_dia (
     actualizado_en   TEXT NOT NULL,
     PRIMARY KEY (dia, proveedor));
 
+-- v7.2 (13/10/2026, Rubén: "que el sistema guarde permanentemente los motivos de
+-- descarte"): una fila por (día, etapa, objeto, grupo de motivo). Cada ciclo que
+-- vuelve a descartar lo mismo suma `veces` y actualiza `ultima_en`; nada se borra.
+-- etapa: NOTICIA (📰) | INTERESANTE (🔎) | FUEGO (🔥 que no llegó a serlo).
+CREATE TABLE IF NOT EXISTS news_descarte (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    dia              TEXT NOT NULL,
+    etapa            TEXT NOT NULL,
+    objeto           TEXT NOT NULL,                  -- partido:<id> | evento:<id>
+    grupo            TEXT NOT NULL,                  -- motivo normalizado (descartes.GRUPOS)
+    motivo           TEXT,                           -- el código tal cual lo dio el motor
+    detalle          TEXT,
+    jugador_id       INTEGER,
+    rival_id         INTEGER,
+    partido_id       INTEGER,
+    evento_id        INTEGER,
+    evaluacion_id    INTEGER,
+    veces            INTEGER NOT NULL DEFAULT 1,
+    primera_en       TEXT NOT NULL,
+    ultima_en        TEXT NOT NULL,
+    UNIQUE (dia, etapa, objeto, grupo));
+CREATE INDEX IF NOT EXISTS ix_news_descarte_dia ON news_descarte (dia, etapa, grupo);
+
 CREATE INDEX IF NOT EXISTS ix_news_evento_jugador ON news_evento (jugador_id, estado);
 CREATE INDEX IF NOT EXISTS ix_news_partido_fecha ON news_partido (fecha_estimada);
 CREATE INDEX IF NOT EXISTS ix_news_eval_partido ON news_evaluacion (partido_id);
@@ -346,6 +369,18 @@ _COLUMNAS_NUEVAS = (
     ("news_articulo", "intentos", "INTEGER NOT NULL DEFAULT 0"),   # v5.1: reintentos de clasificación
     ("news_articulo", "reintentar_en", "TEXT"),
     ("news_evaluacion", "lectura_json", "TEXT"),     # v7: la lectura simple (líneas, resumen, favorecido, motivo en palabras)
+    # v7.2 (13/10/2026): por qué no salió (o sí) a Discord, en la última pasada
+    ("news_evaluacion", "alerta_motivo", "TEXT"),
+    ("news_evento", "noticia_motivo", "TEXT"),
+    ("news_alerta", "prueba", "INTEGER NOT NULL DEFAULT 0"),   # 1 = alerta de PRUEBA (admin), fuera de historial y estadísticas
+    # v7.3 (13/10/2026, Rubén: "ENVIADA no es confirmación de publicación"): seguimiento por paso
+    ("news_alerta", "entregada_en", "TEXT"),          # paso 2: FT Intelligence la recogió de /news/senales (primera vez)
+    ("news_alerta", "entregas", "INTEGER NOT NULL DEFAULT 0"),
+    ("news_alerta", "publicado", "INTEGER"),          # paso 3: 1 FT Discord confirmó · 0 FT Discord falló · NULL sin confirmar
+    ("news_alerta", "publicado_en", "TEXT"),
+    ("news_alerta", "publicado_detalle", "TEXT"),     # canal o error que informó FT Discord (texto libre)
+    ("news_alerta", "publicado_canal", "TEXT"),       # canal donde FT Discord confirmó la publicación
+    ("news_alerta", "publicado_error", "TEXT"),       # error de FT Discord si no se publicó
 )
 
 

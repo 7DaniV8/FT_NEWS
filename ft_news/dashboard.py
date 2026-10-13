@@ -89,7 +89,7 @@ def picks(conn, genero: str = "", limite: int = 500) -> list[dict]:
     TODO lo dicho en Discord (news_alerta.dicho_discord=1): 📰, 🔎, 🔥 y 🔥 exp,
     para siempre. Apuesta (ganado/perdido/unidades) solo las 🔥; 📰 y 🔎 quedan
     como 'seguimiento' con el resultado del partido si lo hay."""
-    where = ["a.dicho_discord=1"]
+    where = ["a.dicho_discord=1", "COALESCE(a.prueba,0)=0"]          # v7.2: las PRUEBA nunca cuentan
     args: list = []
     if genero:
         where.append("UPPER(SUBSTR(COALESCE(p.genero,''),1,1)) = ?")

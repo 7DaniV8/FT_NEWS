@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from ft_news import alertas, config, costos, evaluador, fuentes, jugadores, memoria, partidos, radar
+from ft_news import alertas, config, costos, descartes, evaluador, fuentes, jugadores, memoria, partidos, radar
 from ft_news.db import ahora_iso, estado_set, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
@@ -151,6 +151,17 @@ def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=No
         paso("calibracion", lambda: calibrar_automatico(conn, cliente, cfg, ahora))
     else:
         resumen["pasos"]["calibracion"] = f"al día ({(est.get('calibracion_veredicto') or {}).get('valor')})"
+    # v7.2 (13/10/2026): "bandas calibradas" marcada a mano sin veredicto CALIBRADAS_OK
+    # no se aplica (las 🔥 saldrían como validadas sin evidencia). Solo en memoria,
+    # para este ciclo: la configuración guardada no se toca; el semáforo lo marca.
+    veredicto = (estado_todo(conn).get("calibracion_veredicto") or {}).get("valor")
+    if int(cfg.get("NEWS_BANDAS_CALIBRADAS", 0)) and not descartes.bandas_efectivas(cfg, veredicto):
+        cfg = dict(cfg, NEWS_BANDAS_CALIBRADAS=0)
+        estado_set(conn, "bandas_aviso", f"NEWS_BANDAS_CALIBRADAS=1 sin veredicto CALIBRADAS_OK ({veredicto}): "
+                                         f"se trabaja como SIN calibrar · {ahora_iso()}")
+    else:
+        estado_set(conn, "bandas_aviso", "")
+    estado_set(conn, "bandas_efectivas", int(cfg.get("NEWS_BANDAS_CALIBRADAS", 0)))
     paso("partidos", lambda: partidos.sincronizar(conn, cliente, cfg, ahora))
     # v5: una sola vez, los partidos duplicados que ya estaban en la base se funden
     if not (est.get("fusion_duplicados_en") or {}).get("valor"):

@@ -31,6 +31,7 @@ jugador, y cruza los artículos contra todo el padrón.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -48,6 +49,7 @@ CONSULTA = {
     "pt": '"{nombre}" tênis',
 }
 IDENTIDAD_REVISION_MIN = 0.4
+log = logging.getLogger("ft_news")
 
 
 def _dominios_autorizados(conn, cfg: dict) -> list[str]:
@@ -322,6 +324,7 @@ def procesar_articulo(conn, cfg: dict, gemini, jugador: dict, art: dict, articul
         _revision(conn, "IDENTIDAD_DUDOSA", eid, jugador["jugador_id"],
                   {"confianza": conf, "titulo": art.get("titulo"), "url": art["url"]})
         _marcar_articulo(conn, articulo_id, "IDENTIDAD_DUDOSA", f"identidad {conf:.2f}: a revisión", jugador["jugador_id"])
+        _guardar_motivo_noticia(conn, eid, jugador["jugador_id"], {"alerta_id": None, "motivo": "IDENTIDAD_DUDOSA"}, ahora)
         return {"resultado": "IDENTIDAD_DUDOSA", "evento_id": eid}
     if _dt(ev["vigente_hasta"]) < ahora:
         ev["estado"] = "VENCIDO"
@@ -334,7 +337,32 @@ def procesar_articulo(conn, cfg: dict, gemini, jugador: dict, art: dict, articul
     out = {"resultado": "EVENTO", "evento_id": eid, "estado": ev["estado"], "categoria": d["categoria"]}
     if ev["estado"] == "VIGENTE":
         out["alerta"] = _tras_evento_externo(conn, cfg, ev, jugador, ahora)
+    else:
+        out["alerta"] = {"alerta_id": None, "motivo": f"ESTADO:{ev['estado']}"}
+    _guardar_motivo_noticia(conn, eid, jugador["jugador_id"], out["alerta"], ahora)
     return out
+
+
+def _guardar_motivo_noticia(conn, evento_id, jugador_id, alerta: dict, ahora: datetime) -> None:
+    """v7.2: por qué esta noticia externa salió (o no) como 📰, para siempre:
+    en el propio evento (noticia_motivo) y en news_descarte si no salió."""
+    try:
+        from ft_news import descartes
+        from ft_news.db import ejecutar_con_reintento
+        mot = (alerta or {}).get("motivo")
+        if (alerta or {}).get("alerta_id"):
+            txt = f"ALERTA #{alerta['alerta_id']} (NOTICIA)"
+        else:
+            descartes.registrar(conn, "NOTICIA", mot, ahora=ahora, evento_id=evento_id, jugador_id=jugador_id)
+            txt = f"NO ENVIADA · {descartes.grupo(mot)} ({mot})"
+
+        def _w():
+            conn.execute("UPDATE news_evento SET noticia_motivo=? WHERE id=?", (txt[:300], evento_id))
+            conn.commit()
+        if evento_id:
+            ejecutar_con_reintento(_w, conn=conn)
+    except Exception as e:                                        # pragma: no cover — nunca tumba el radar
+        log.warning("[FT_NEWS] motivo de la noticia %s: %s", evento_id, e)
 
 
 def _tras_evento_externo(conn, cfg: dict, ev: dict, jugador: dict, ahora: datetime) -> dict:

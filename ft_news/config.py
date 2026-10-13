@@ -50,11 +50,20 @@ PARAMETROS = (
     ("NEWS_BANDAS_AUTO", 0, "bool",
      "1 = cada 6 h pide la calibración a RankingFTR y sigue su veredicto (CALIBRADAS_OK → 1; NO → 0). "
      "0 = la decide Rubén a mano (v5: default 0; la calibración informa, no activa)."),
+    ("NEWS_BANDAS_EXIGIR_VEREDICTO", 1, "bool",
+     "v7.2 (13/10/2026): 1 = NEWS_BANDAS_CALIBRADAS=1 solo se aplica si el último veredicto de RankingFTR es "
+     "CALIBRADAS_OK; si no, el motor trabaja como sin calibrar (🔥 EXPERIMENTAL, nunca validada) y el semáforo "
+     "marca ERROR de configuración. Tampoco deja marcarla a mano sin ese veredicto. 0 = comportamiento v7.1."),
     ("NEWS_FUENTES_AUTORIZADAS_SOLO", 1, "bool",
      "1 = solo se leen fuentes con autorizada=1 en news_fuente (hoy: ninguna)."),
     ("NEWS_DISCORD_ACTIVO", 1, "bool",
      "0 = ninguna señal sale a /news/senales (las alertas se generan igual y se ven en la pestaña). "
      "v6 (09/10/2026 23:13, Rubén: 'activemos las tres alertas'): nace ENCENDIDO; Admin → FT NEWS lo apaga en un clic."),
+    ("NEWS_PRUEBA_SOLO_ADMIN_VERIFICADA", 0, "bool",
+     "v7.3 (13/10/2026, Rubén: la prueba no se envía a toda la comunidad): 0 = la PRUEBA de Discord NO se puede "
+     "crear ni viaja a FT Intelligence. Pasa a 1 cuando estén desplegados FT Intelligence news-v3 y FT Discord v16 "
+     "(verificado en su código: una señal con solo_admin va únicamente a DISCORD_CANAL_ADMIN_ID y, sin ese canal, "
+     "a ningún lado) y la variable DISCORD_CANAL_ADMIN_ID esté puesta en FT Discord."),
     ("NEWS_SENAL_MAX_HORAS", 12, "int",
      "v5.1: una alerta pendiente de más de N h ya no viaja a Discord (queda 'omitida: VENCIDA'); evita una avalancha al encender."),
     ("NEWS_DISCORD_INTERESANTE", 1, "bool",
