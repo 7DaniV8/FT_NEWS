@@ -122,7 +122,7 @@ PARAMETROS = (
     ("NEWS_CARGA_EXCEPCIONAL_PARTIDOS_7D", 6, "int", "≥ N partidos en 7 días → carga EXCEPCIONAL (evento negativo; igual no da 🔥 sola)."),
     ("NEWS_CARGA_EXCEPCIONAL_TRES_SETS_7D", 5, "int", "≥ N partidos a 3+ sets en 7 días → EXCEPCIONAL."),
     ("NEWS_CARGA_INACTIVIDAD_DIAS", 10, "int", "≥ N días sin competir → INACTIVIDAD (se guarda y se informa; sin ventaja ni castigo)."),
-    ("NEWS_IDIOMAS", "en,es,it,fr,pt", "str", "Idiomas de búsqueda (Fase 1)."),
+    ("NEWS_IDIOMAS", "en,es,it,fr,pt,de", "str", "Idiomas de búsqueda (v7.8: + alemán)."),
     ("NEWS_CIRCUITOS", "atp,wta,challenger,wta125,itf,utr", "str", "Circuitos dentro del proyecto."),
 )
 DEFAULTS = {k: v for k, v, _t, _d in PARAMETROS}

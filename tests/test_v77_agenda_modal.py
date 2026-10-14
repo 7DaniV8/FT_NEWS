@@ -76,3 +76,22 @@ def test_endpoint_agenda(conn, cfg, monkeypatch):
         r = cl.get(f"/news/portada/agenda/{pid}", headers=h)
         assert r.status_code == 200 and r.json()["jugadores"]
         assert cl.get("/news/portada/agenda/99999", headers=h).status_code == 404
+
+
+# ── v7.8 (14/10/2026, Rubén: «activa alemán») ──────────────────────────────
+def test_aleman_activo(conn):
+    from ft_news import config, jugadores, radar
+    from ft_news.db import ensure_tablas
+    assert "de" in config.DEFAULTS["NEWS_IDIOMAS"].split(",")
+    assert radar.CONSULTA["de"].format(nombre="Max Wiskandt") == '"Max Wiskandt" Tennis' and radar.TEMAS["de"]
+    assert jugadores.idiomas_para({"pais": "GER"}, ["en", "es", "de"]) == ["en", "es", "de"]
+    # una base con NEWS_IDIOMAS guardado sin alemán recibe «de» UNA vez
+    conn.execute("DELETE FROM news_estado WHERE clave='migracion_idioma_de'")
+    conn.execute("INSERT OR REPLACE INTO news_config (clave, valor, actualizado_en, actualizado_por) VALUES ('NEWS_IDIOMAS','en,es','x','admin')")
+    conn.commit()
+    ensure_tablas(conn)
+    assert conn.execute("SELECT valor FROM news_config WHERE clave='NEWS_IDIOMAS'").fetchone()[0] == "en,es,de"
+    conn.execute("UPDATE news_config SET valor='en' WHERE clave='NEWS_IDIOMAS'")      # Admin decide después: no se vuelve a tocar
+    conn.commit()
+    ensure_tablas(conn)
+    assert conn.execute("SELECT valor FROM news_config WHERE clave='NEWS_IDIOMAS'").fetchone()[0] == "en"

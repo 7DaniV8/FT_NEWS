@@ -406,6 +406,15 @@ def ensure_tablas(conn: sqlite3.Connection) -> None:
         cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tabla})")}
         if col not in cols:
             conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
+    # v7.8 (14/10/2026, Rubén: «activa alemán»): una sola vez, si NEWS_IDIOMAS quedó guardado en la base sin alemán, se le
+    # agrega «de» (el default ya lo trae). Queda marcado en news_estado para no volver a tocar la elección de Admin.
+    if not conn.execute("SELECT 1 FROM news_estado WHERE clave='migracion_idioma_de'").fetchone():
+        r = conn.execute("SELECT valor FROM news_config WHERE clave='NEWS_IDIOMAS'").fetchone()
+        if r and "de" not in [x.strip() for x in str(r[0] or "").split(",")]:
+            conn.execute("UPDATE news_config SET valor=?, actualizado_en=?, actualizado_por='v7.8 · alemán' WHERE clave='NEWS_IDIOMAS'",
+                         (str(r[0]).rstrip(", ") + ",de", ahora_iso()))
+        conn.execute("INSERT OR REPLACE INTO news_estado (clave, valor, actualizado_en) VALUES ('migracion_idioma_de', '1', ?)",
+                     (ahora_iso(),))
     conn.commit()
 
 

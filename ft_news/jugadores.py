@@ -21,6 +21,7 @@ from ft_news.db import ahora_iso, ejecutar_con_reintento
 IDIOMA_POR_PAIS = {
     "ITA": "it", "FRA": "fr", "BEL": "fr", "SUI": "fr", "MON": "fr",
     "BRA": "pt", "POR": "pt",
+    "GER": "de", "AUT": "de", "LIE": "de",          # v7.8 (14/10/2026): alemán
     "ESP": "es", "ARG": "es", "COL": "es", "CHI": "es", "MEX": "es", "PER": "es", "URU": "es", "ECU": "es",
     "VEN": "es", "BOL": "es", "PAR": "es", "DOM": "es", "GUA": "es", "CRC": "es",
 }

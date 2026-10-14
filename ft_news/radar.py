@@ -48,6 +48,7 @@ CONSULTA = {
     "it": '"{nombre}" tennis',
     "fr": '"{nombre}" tennis',
     "pt": '"{nombre}" tênis',
+    "de": '"{nombre}" Tennis',                    # v7.8 (14/10/2026): alemán
 }
 IDENTIDAD_REVISION_MIN = 0.4
 log = logging.getLogger("ft_news")
@@ -512,6 +513,7 @@ TEMAS = {
     "it": ["tennis infortunio ritiro", "tennis rientro infortunio"],
     "fr": ["tennis blessure forfait", "tennis retour blessure"],
     "pt": ["tênis lesão desistência"],
+    "de": ["Tennis Verletzung Absage", "Tennis Aufgabe verletzt", "Tennis Comeback nach Verletzung"],   # v7.8
 }
 
 
