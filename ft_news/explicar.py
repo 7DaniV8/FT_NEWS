@@ -77,6 +77,9 @@ MOTIVOS = {
     "SIN_NOTICIA_EXTERNA": "Sin noticia externa: no sale a Discord.",
     "NO_ES_INTERESANTE": "No es un partido interesante.",
     "ERROR": "Error del motor.",
+    "DOBLES": "Es un resultado de dobles: no dice nada del jugador en individuales.",
+    "HECHO_YA_AVISADO": "Ese mismo hecho ya se avisó en otra alerta.",
+    "MERCADO_YA_LO_REFLEJA": "El mercado ya tiene la noticia: no hay nada que avisar.",
 }
 _MOTIVOS_PREFIJO = {
     "REPETIDA": "Ya se avisó de este partido con la misma información.",

@@ -165,6 +165,8 @@ def noticia_importante(conn, cfg: dict, evento: dict, jugador: dict, ahora: Opti
         return {"alerta_id": None, "motivo": "NEWS_DISCORD_NOTICIA=0"}
     if not descubridor.es_externo(evento):
         return {"alerta_id": None, "motivo": "INTERNO"}
+    if tx.es_dobles(evento):                          # v7.5: un resultado de dobles no es noticia del jugador
+        return {"alerta_id": None, "motivo": "DOBLES"}
     cat, nivel, nat = evento.get("categoria"), str(evento.get("nivel") or "C"), evento.get("naturaleza")
     if cat in CATEGORIAS_NOTICIA_FUERTE:
         pass
@@ -184,6 +186,9 @@ def noticia_importante(conn, cfg: dict, evento: dict, jugador: dict, ahora: Opti
         return {"alerta_id": None, "motivo": "HECHO_VIEJO"}
     if evento.get("estado") not in (None, "VIGENTE", "EN_SEGUIMIENTO"):
         return {"alerta_id": None, "motivo": f"ESTADO:{evento.get('estado')}"}
+    ya = hechos_ya_avisados(conn, [evento.get("id")], "NOTICIA")
+    if ya:                                            # v7.5: un mismo hecho no se vuelve a anunciar
+        return {"alerta_id": None, "motivo": f"HECHO_YA_AVISADO:{ya}"}
     clave = f"NOTICIA:{jugador['id']}:{cat}"
     prev = _reciente(conn, clave, int(cfg.get("NEWS_ALERTA_REPETIR_DIAS", 7)), ahora)
     nuevo = None
@@ -217,8 +222,41 @@ def noticia_importante(conn, cfg: dict, evento: dict, jugador: dict, ahora: Opti
 #  🔎 PARTIDO INTERESANTE y 🔥
 # ═════════════════════════════════════════════════════════════════════
 
+# v7.5: lo que el propio motor concluye cuando el mercado ya refleja la noticia → no es un 🔎 para Discord
+MERCADO_YA_LO_TIENE = ("SIN_INFORMACION_NO_REFLEJADA", "MERCADO_YA_DESCONTO")
+
+
+def hechos_ya_avisados(conn, evento_ids: list, tipo: str) -> Optional[int]:
+    """v7.5 (caso Andrade Da Silva, 13/10): si TODOS estos hechos ya salieron en otra alerta del MISMO tipo (no
+    omitida, no prueba), devuelve el id de la más reciente; si no, None. Así un hecho sale una vez como 📰 y una vez
+    como 🔎 (el partido al que afecta), pero no vuelve en cada ronda mientras siga vigente (un retiro vale 21 días).
+    Una 🔥 no pasa por acá: trae información nueva (la oportunidad en la cuota)."""
+    ids = {int(i) for i in evento_ids or [] if i}
+    if not ids:
+        return None
+    prueba = "AND COALESCE(prueba,0)=0" if "prueba" in {r[1] for r in conn.execute("PRAGMA table_info(news_alerta)")} else ""
+    cubiertos, ultimo = set(), None
+    for r in conn.execute(f"SELECT id, evento_ids_json FROM news_alerta WHERE tipo=? AND dicho_discord <> 2 {prueba} "
+                          "ORDER BY id DESC LIMIT 2000", (tipo,)):
+        try:
+            prev = {int(x) for x in json.loads(r[1] or "[]") or [] if x}
+        except (TypeError, ValueError):
+            continue
+        if prev & ids:
+            cubiertos |= prev & ids
+            ultimo = ultimo or r[0]
+        if cubiertos >= ids:
+            return ultimo
+    return None
+
+
+def _alerta(conn, aid: int) -> Optional[dict]:
+    r = conn.execute("SELECT * FROM news_alerta WHERE id=?", (aid,)).fetchone()
+    return dict(r) if r else None
+
+
 def _externos_fuertes(eventos: list[dict]) -> list[dict]:
-    return [e for e in eventos if descubridor.es_externo(e) and tx.es_fuerte(e.get("categoria", ""))
+    return [e for e in eventos if descubridor.es_externo(e) and tx.es_fuerte_evento(e)
             and _RANGO.get(str(e.get("nivel") or "C"), 1) >= 2]
 
 
@@ -229,9 +267,16 @@ def partido_interesante(conn, cfg: dict, r: dict, p: dict, jx: dict, jr: dict, e
         return {"alerta_id": None, "motivo": "NEWS_DISCORD_INTERESANTE=0"}
     if r.get("tipo_alerta") != "INTERESANTE" or r.get("motivo") == "TEXTO_PROHIBIDO":
         return {"alerta_id": None, "motivo": "NO_ES_INTERESANTE"}
+    # v7.5: si FT NEWS concluyó que el mercado ya tiene la noticia, no hay nada que avisar (queda en la portada)
+    if str(r.get("motivo") or "").split(":")[0] in MERCADO_YA_LO_TIENE:
+        return {"alerta_id": None, "motivo": f"MERCADO_YA_LO_REFLEJA:{r.get('motivo')}"}
     fx, fr = _externos_fuertes(ex), _externos_fuertes(er)
     if not fx and not fr:
         return {"alerta_id": None, "motivo": "SIN_NOTICIA_EXTERNA"}
+    ya = hechos_ya_avisados(conn, [e.get("id") for e in fx + fr], "INTERESANTE")
+    if ya and (str((_alerta(conn, ya) or {}).get("clave") or "").split(":") + ["", ""])[1] != str(p["id"]):
+        # v7.5: esos hechos ya salieron en un 🔎 de OTRO partido (el mismo partido lo maneja REPETIDA, más abajo)
+        return {"alerta_id": None, "motivo": f"HECHO_YA_AVISADO:{ya}"}
     horas = int(cfg.get("NEWS_RIVAL_HORAS", 48))
     faltan, fres = [], {}
     for j in (jx, jr):

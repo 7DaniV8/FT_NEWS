@@ -107,6 +107,17 @@ def listar(conn) -> list[dict]:
     return [dict(r) for r in conn.execute("SELECT * FROM news_fuente ORDER BY tipo, nombre").fetchall()]
 
 
+# v7.5 (13/10/2026): de las webs oficiales de los circuitos solo se lee su RSS oficial (lo autorizado). Una página
+# suya que traiga el buscador (p. ej. el «stats centre» de atptour.com) no se lee: sería acceso automatizado a esa web.
+SOLO_RSS = ("atptour.com", "wtatennis.com", "itftennis.com")
+
+
+def solo_rss(dominio: str) -> bool:
+    d = (dominio or "").lower().split("/")[0]
+    d = d[4:] if d.startswith("www.") else d
+    return any(d == x or d.endswith("." + x) for x in SOLO_RSS)
+
+
 def permitida(conn, dominio: str, cfg: dict) -> bool:
     """La compuerta que todo lector futuro debe pasar. Con
     NEWS_FUENTES_AUTORIZADAS_SOLO=1 (default) solo pasa autorizada=1."""

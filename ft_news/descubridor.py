@@ -99,7 +99,7 @@ def _direccion_de(eventos: list[dict]) -> dict:
 def _fuerza(eventos: list[dict]) -> tuple:
     """Orden de evidencia, sin aritmética de probabilidades: (hay fuerte A/B,
     mejor nivel, cantidad)."""
-    fuerte = any(tx.es_fuerte(e["categoria"]) and e["nivel"] in ("A", "B") for e in eventos)
+    fuerte = any(tx.es_fuerte_evento(e) and e["nivel"] in ("A", "B") for e in eventos)
     mejor = max((_RANGO_NIVEL[e["nivel"]] for e in eventos), default=0)
     return (1 if fuerte else 0, mejor, len(eventos))
 
@@ -109,7 +109,7 @@ def _evidencia_suficiente(eventos: list[dict], nivel_min: str) -> tuple[bool, st
     concordantes con nivel ≥ mínimo (acumulación)."""
     minimo = _RANGO_NIVEL.get(nivel_min, 2)
     validos = [e for e in eventos if _RANGO_NIVEL[e["nivel"]] >= minimo]
-    fuertes = [e for e in validos if tx.es_fuerte(e["categoria"])]
+    fuertes = [e for e in validos if tx.es_fuerte_evento(e)]
     if fuertes:
         return True, max(fuertes, key=lambda e: _RANGO_NIVEL[e["nivel"]])["nivel"], "FUERTE"
     if len(validos) >= 2:
@@ -179,7 +179,7 @@ def evaluar(*, cfg: dict, ahora: Optional[datetime] = None,
                     "La noticia no alcanza el nivel de evidencia exigido para hablar de valor.")
     # 5b (v5, Rubén 09/10): sin una noticia EXTERNA fuerte no hay 🔥. Un cálculo
     # propio de carga o antecedentes acompaña, pero no es una oportunidad.
-    externos = [e for e in usados if es_externo(e) and tx.es_fuerte(e["categoria"])
+    externos = [e for e in usados if es_externo(e) and tx.es_fuerte_evento(e)
                 and _RANGO_NIVEL[e["nivel"]] >= _RANGO_NIVEL.get(str(cfg.get("NEWS_NIVEL_MIN_FUEGO", "B")), 2)]
     r["externo"] = int(bool(externos))
     if not externos:

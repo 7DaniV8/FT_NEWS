@@ -8,6 +8,8 @@ de evidencia A/B/C. La prioridad solo ordena la cola; no excluye nada.
 """
 from __future__ import annotations
 
+import re
+
 NEGATIVA, POSITIVA, NEUTRA, MIXTA = "NEGATIVA", "POSITIVA", "NEUTRA", "MIXTA"
 HECHO, DECLARACION, NO_VERIFICADA, INTERPRETACION = "HECHO", "DECLARACION", "NO_VERIFICADA", "INTERPRETACION"
 
@@ -40,6 +42,23 @@ NIVELES = ("A", "B", "C")
 
 def es_fuerte(categoria: str) -> bool:
     return categoria in FUERTES
+
+
+# v7.5 (13/10/2026, caso Andrade Da Silva: «Derrota por walkover en dobles» salió como retiro suyo en individuales):
+# un resultado de DOBLES (walkover, retiro o derrota) no dice qué le pasa al jugador en individuales — ni siquiera
+# quién de la pareja se bajó. Queda como contexto: nunca es noticia fuerte.
+_DOBLES = re.compile(r"\b(dobles|doubles|doble mixto|dobles mixtos|mixed doubles|en pareja con|pareja de dobles|"
+                     r"doubles partner|compañer[oa] de dobles|partner)\b", re.IGNORECASE)
+
+
+def es_dobles(ev: dict) -> bool:
+    texto = " ".join(str(ev.get(k) or "") for k in ("titular", "resumen_es", "fragmento_original", "relevancia_deportiva"))
+    return bool(_DOBLES.search(texto))
+
+
+def es_fuerte_evento(ev: dict) -> bool:
+    """Categoría fuerte y NO es un resultado de dobles."""
+    return es_fuerte(str(ev.get("categoria") or "")) and not es_dobles(ev)
 
 
 def vigencia_dias(categoria: str) -> int:

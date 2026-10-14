@@ -40,6 +40,7 @@ from ft_news import jugadores as jg
 from ft_news import taxonomia as tx
 from ft_news.db import ahora_iso, ejecutar_con_reintento
 from ft_news.proveedores.tavily import ErrorProveedor
+from ft_news.proveedores.tavily import dominio_de as tavily_dominio
 
 CONSULTA = {
     "en": '"{nombre}" tennis',
@@ -57,7 +58,8 @@ def _dominios_autorizados(conn, cfg: dict) -> list[str]:
     for f in fuentes.listar(conn):
         if f["tipo"] in ("AGREGADOR", "PROPIA"):
             continue
-        if fuentes.permitida(conn, f["dominio"], cfg):
+        # v7.5: atptour.com / wtatennis.com / itftennis.com solo por su RSS oficial; el buscador no las lee
+        if fuentes.permitida(conn, f["dominio"], cfg) and not fuentes.solo_rss(f["dominio"]):
             out.append(f["dominio"].split("/")[0])
     return sorted(set(out))
 
@@ -140,6 +142,8 @@ def _articulo_nuevo(conn, art: dict, origen: str = "radar", jugador_id: Optional
     clasificarlo, reintentar_pendientes lo retoma (v5.1, Rubén §2)."""
     if conn.execute("SELECT 1 FROM news_articulo WHERE url=?", (art["url"],)).fetchone():
         return None
+    if origen != "rss" and fuentes.solo_rss(art.get("dominio") or tavily_dominio(art.get("url") or "")):
+        return None                       # v7.5: páginas de la ATP/WTA/ITF que traiga el buscador no se leen
 
     def _w():
         cur = conn.execute("INSERT INTO news_articulo (url, dominio, titulo, fecha_publicacion, idioma, fragmento, origen, "
@@ -379,7 +383,7 @@ def _tras_evento_externo(conn, cfg: dict, ev: dict, jugador: dict, ahora: dateti
     except Exception as e:                                        # la alerta nunca tumba el radar
         res = {"alerta_id": None, "motivo": f"error: {e}"[:200]}
     try:
-        if tx.es_fuerte(ev.get("categoria", "")):
+        if tx.es_fuerte_evento(ev):
             cola = conn.execute("SELECT situacion FROM news_jugador_cola WHERE jugador_id=?", (jugador["jugador_id"],)).fetchone()
             if not cola or cola["situacion"] in ("SIN_PARTIDO", "EVENTO_VIGENTE"):
                 jg.encolar(conn, jugador["jugador_id"], "EVENTO_VIGENTE", 24, "EVENTO_VIGENTE", 2,

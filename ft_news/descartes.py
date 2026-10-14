@@ -55,6 +55,9 @@ GRUPOS = {
     "ESTADO_FISICO_SIN_VERIFICAR": "regreso con lesión previa sin verificar con partidos completos",
     "BANDAS_NO_CALIBRADAS": "bandas sin calibrar y la señal experimental apagada",
     "YA_AVISADO": "ese jugador ya tuvo 🔥 en el mismo torneo",
+    "DOBLES": "es un resultado de dobles: no dice nada del jugador en individuales",
+    "HECHO_YA_AVISADO": "ese mismo hecho ya salió en otra alerta del mismo tipo",
+    "MERCADO_YA_LO_REFLEJA": "FT NEWS concluyó que el mercado ya tiene la noticia: nada que avisar",
     "TEXTO_PROHIBIDO": "el texto generado no pasó el control de palabras prohibidas",
     "ERROR": "error interno al decidir (ver detalle)",
     "OTRO": "otro motivo (ver código)",
@@ -81,6 +84,7 @@ _MAPA = {
     "ESTADO_FISICO_SIN_VERIFICAR_RIVAL": "ESTADO_FISICO_SIN_VERIFICAR",
     "BANDAS_NO_CALIBRADAS": "BANDAS_NO_CALIBRADAS", "YA_AVISADO": "YA_AVISADO",
     "TEXTO_PROHIBIDO": "TEXTO_PROHIBIDO",
+    "DOBLES": "DOBLES", "HECHO_YA_AVISADO": "HECHO_YA_AVISADO", "MERCADO_YA_LO_REFLEJA": "MERCADO_YA_LO_REFLEJA",
 }
 
 # Motivos que NO son un descarte (la alerta salió, o no correspondía evaluar esa etapa).

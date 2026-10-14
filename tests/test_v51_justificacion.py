@@ -53,7 +53,10 @@ def test_experimental_sin_justificacion_queda_como_interesante(conn, cfg):
     assert "no alcanza para 🔥" in e["conclusion"] and "no tiene una cuota previa con la que compararse" in e["conclusion"]
     assert "es una declaración" in e["conclusion"]
     tipos = sorted(a["tipo"] for a in alertas.listar(conn))
-    assert tipos == ["INTERESANTE", "NOTICIA"]                        # sale la 🔎 (y la 📰), no la 🔥
+    # v7.5 (Rubén 13/10, caso Andrade Da Silva): si FT NEWS concluye que el mercado ya tiene la noticia, NO sale la 🔎
+    # («podría favorecer…» contradecía «el mercado parece haberla incorporado»); sale solo la 📰 y queda el motivo.
+    assert tipos == ["NOTICIA"]
+    assert "MERCADO_YA_LO_REFLEJA" in (conn.execute("SELECT alerta_motivo FROM news_evaluacion ORDER BY id DESC").fetchone()[0] or "")
     assert alertas.pendientes(conn, c) and all(x["tipo_alerta"] != "FUEGO_EXPERIMENTAL" for x in alertas.pendientes(conn, c))
 
 

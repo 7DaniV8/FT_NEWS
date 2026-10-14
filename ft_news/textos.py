@@ -161,6 +161,18 @@ def fiabilidad(e: dict) -> str:
         return "📊 Dato calculado por FullTennis (no es una noticia de prensa)."
     f = _fuente_corta(fuente)
     nat, nivel = e.get("naturaleza"), str(e.get("nivel") or "C")
+    # v7.5 (caso Andrade Da Silva): en un retiro o walkover lo confirmado es QUE pasó, no POR QUÉ. Se dice qué está
+    # confirmado y, si la fuente no da la causa, que no se informó (no se da a entender una lesión).
+    if e.get("categoria") == "RETIRO_ABANDONO" and nat == "HECHO":
+        txt = f"{e.get('titular') or ''} {e.get('resumen_es') or ''} {e.get('fragmento_original') or ''}".lower()
+        que = "Walkover" if re.search(r"walk ?over|\bw\.? ?o\b|w/o", txt) else "Retiro"
+        causa = re.search(r"lesi|injur|dolor|\bpain|molest|enferm|\bill(ness)?\b|virus|fiebre|fever|calambre|cramp|médic|"
+                          r"medical|hombro|rodilla|tobillo|muñeca|espalda|isquio|abdomin|shoulder|knee|ankle|wrist|\bback\b|"
+                          r"hamstring|personal|famil", txt)
+        fin = "" if causa else "; el motivo no se informó"
+        if nivel == "A":
+            return f"✅ {que} confirmado por {f}{fin}."
+        return f"📰 {que} informado por {f}; sin confirmación oficial{fin}."
     if nat == "HECHO" and nivel == "A":
         return f"✅ Confirmado por fuente oficial ({f})."
     if nat == "HECHO":
