@@ -334,6 +334,20 @@ CREATE INDEX IF NOT EXISTS ix_news_descarte_dia ON news_descarte (dia, etapa, gr
 CREATE INDEX IF NOT EXISTS ix_news_evento_jugador ON news_evento (jugador_id, estado);
 CREATE INDEX IF NOT EXISTS ix_news_partido_fecha ON news_partido (fecha_estimada);
 CREATE INDEX IF NOT EXISTS ix_news_eval_partido ON news_evaluacion (partido_id);
+
+-- 📷 v7.6 (13/10/2026): fotos con licencia (Wikimedia Commons) por jugador, también el «no hay» (ver fotos.py).
+CREATE TABLE IF NOT EXISTS news_foto (
+    jugador_id   INTEGER PRIMARY KEY,
+    estado       TEXT NOT NULL,
+    qid          TEXT,
+    archivo      TEXT,
+    url          TEXT,
+    pagina       TEXT,
+    autor        TEXT,
+    licencia     TEXT,
+    licencia_url TEXT,
+    detalle      TEXT,
+    buscado_en   TEXT NOT NULL);
 """
 
 # Columnas agregadas después de la Fase 0 (ADD COLUMN idempotente).

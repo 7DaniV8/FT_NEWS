@@ -16,6 +16,8 @@ con autorizada=1 (fuentes.permitida).
 """
 from __future__ import annotations
 
+import os
+
 import logging
 import threading
 import traceback
@@ -101,7 +103,7 @@ def _proveedores(cliente_tavily=None, cliente_gemini=None, cliente_claude=None):
 
 
 def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=None,
-          ahora: Optional[datetime] = None, claude=None, rss_transport=None) -> dict:
+          ahora: Optional[datetime] = None, claude=None, rss_transport=None, fotos_cli=None) -> dict:
     """Un ciclo. Devuelve un resumen (para tests y para /news/estado)."""
     ahora = ahora or datetime.now(timezone.utc)
     cfg = cfg or config.leer_config(conn)
@@ -235,6 +237,11 @@ def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=No
         resumen["pasos"]["rss"] = "al día" if clasificador is not None else {"motivo": "SIN_CLAVES"}
     paso("descubridor", lambda: evaluador.correr(conn, cfg, ahora))
     paso("alertas_vencidas", lambda: {"vencidas": alertas.vencer_pendientes(conn, cfg, ahora)})
+    # v7.6: fotos con licencia (Wikimedia Commons) de los jugadores que puede mostrar la portada. Pocas por vuelta;
+    # en las pruebas (FT_NEWS_SIN_WORKER=1) solo con un cliente falso.
+    if fotos_cli is not None or os.getenv("FT_NEWS_SIN_WORKER") != "1":
+        from ft_news import fotos
+        paso("fotos", lambda: fotos.completar(conn, cfg, fotos.jugadores_de_portada(conn, ahora), ahora, cli=fotos_cli))
     def _cierre():
         from ft_news import cierre
         return cierre.correr(conn, cliente, cfg, ahora)

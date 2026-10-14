@@ -66,6 +66,9 @@ PARAMETROS = (
      "a ningún lado) y la variable DISCORD_CANAL_ADMIN_ID esté puesta en FT Discord."),
     ("NEWS_SENAL_MAX_HORAS", 12, "int",
      "v5.1: una alerta pendiente de más de N h ya no viaja a Discord (queda 'omitida: VENCIDA'); evita una avalancha al encender."),
+    ("NEWS_FOTOS_ACTIVO", 1, "bool",
+     "v7.6 (13/10/2026): 1 = la portada usa fotos de Wikimedia Commons con licencia libre (CC0, dominio público, CC BY, "
+     "CC BY-SA), solo de la ficha de Wikidata del tenista y siempre con autor y licencia; 0 = solo tarjetas de FullTennis."),
     ("NEWS_DISCORD_INTERESANTE", 1, "bool",
      "1 = salen las 🔎 PARTIDO INTERESANTE seleccionadas (noticia externa nivel ≥ B, los dos investigados); "
      "0 = no. (v5, 09/10/2026: nace encendido, pedido de Rubén.)"),

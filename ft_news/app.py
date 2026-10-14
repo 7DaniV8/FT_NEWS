@@ -334,6 +334,13 @@ def _lectura(conn, e: dict, cfg: dict) -> dict:
 @app.get("/news/hoy", dependencies=[Depends(_auth)])
 def hoy(conn=Depends(_conn), limite: int = 60):
     """Para la pestaña 📰: evaluaciones recientes, eventos recientes, cola y revisión."""
+    # v7.6: «hoy» = las 24 h anteriores a la última evaluación (en producción, ahora mismo)
+    ult = conn.execute("SELECT MAX(COALESCE(actualizado_en, creado_en)) FROM news_evaluacion").fetchone()[0]
+    try:
+        ref = datetime.fromisoformat(str(ult).replace("Z", "+00:00")) if ult else datetime.now(timezone.utc)
+        ref = ref if ref.tzinfo else ref.replace(tzinfo=timezone.utc)
+    except ValueError:
+        ref = datetime.now(timezone.utc)
     evs = [dict(r) for r in conn.execute(
         "SELECT e.id, e.tipo_alerta, e.motivo, e.conclusion, e.nivel, e.banda_utr, e.banda_mercado, e.desvio, "
         "e.direccion_neta, e.utr_x, e.utr_rival, e.cuota_x, e.cuota_rival, e.dicho_discord, e.dicho_motivo, "
@@ -343,8 +350,10 @@ def hoy(conn=Depends(_conn), limite: int = 60):
         "jg.nombre AS ganador FROM news_evaluacion e JOIN news_partido p ON p.id=e.partido_id "
         "JOIN news_jugador jx ON jx.id=e.jugador_x_id JOIN news_jugador jr ON jr.id=e.rival_id "
         "LEFT JOIN news_resultado r ON r.evaluacion_id=e.id LEFT JOIN news_jugador jg ON jg.id=r.ganador_id "
+        # v7.6 (Rubén: «Hoy» mostraba partidos del 09-10/10): solo lo evaluado en las últimas 24 h o por jugarse
+        "WHERE COALESCE(e.actualizado_en, e.creado_en) >= ? OR p.fecha_estimada >= ? "
         "ORDER BY CASE e.tipo_alerta WHEN 'FUEGO' THEN 0 WHEN 'INTERESANTE' THEN 1 ELSE 2 END, p.fecha_estimada "
-        "LIMIT ?", (limite,)).fetchall()]
+        "LIMIT ?", ((ref - timedelta(hours=24)).isoformat(), (ref - timedelta(hours=3)).isoformat(), limite)).fetchall()]
     eventos = [dict(r) for r in conn.execute(
         "SELECT ev.id, ev.categoria, ev.direccion, ev.naturaleza, ev.nivel, ev.fecha_evento, ev.fecha_publicacion, "
         "ev.fuente, ev.enlace, ev.resumen_es, ev.relevancia_deportiva, ev.estado, ev.verificar_estado_fisico, "
@@ -377,6 +386,26 @@ def portada_get(conn=Depends(_conn)):
     solo con datos aptos para usuarios. Solo lectura. Ver portada.py."""
     from ft_news import portada
     return portada.armar(conn)
+
+
+@app.get("/news/portada/partido/{alerta_id}", dependencies=[Depends(_auth)])
+def portada_partido(alerta_id: int, conn=Depends(_conn)):
+    """v7.6: el modal de un 🔎/🔥 de la portada — todo lo que FT NEWS encontró, en palabras. Solo lectura."""
+    from ft_news import portada
+    d = portada.detalle_partido(conn, alerta_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No existe ese partido en la portada.")
+    return d
+
+
+@app.get("/news/portada/noticia/{evento_id}", dependencies=[Depends(_auth)])
+def portada_noticia(evento_id: int, conn=Depends(_conn)):
+    """v7.6: el modal de una noticia de la portada. Solo lectura."""
+    from ft_news import portada
+    d = portada.detalle_noticia(conn, evento_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No existe esa noticia.")
+    return d
 
 
 @app.get("/news/costos", dependencies=[Depends(_auth)])
