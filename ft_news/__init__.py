@@ -9,4 +9,4 @@ descubridor → 🔥/🔎 → FT Intelligence → FT Discord. Nace encendido con
 fuentes que Rubén autorizó; las bandas las valida la calibración automática
 contra RankingFTR (sin CALIBRADAS_OK no hay 🔥). Ver DESPLIEGUE-HOY.md.
 """
-VERSION = "ft-news-v7.3-20261013"
+VERSION = "ft-news-v7.4-20261013"

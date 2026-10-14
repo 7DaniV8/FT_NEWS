@@ -371,6 +371,14 @@ def hoy(conn=Depends(_conn), limite: int = 60):
             "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
 
 
+@app.get("/news/portada", dependencies=[Depends(_auth)])
+def portada_get(conn=Depends(_conn)):
+    """v7.4 (13/10/2026): la portada tipo periódico (titular, partidos interesantes, noticias, lesiones y agenda),
+    solo con datos aptos para usuarios. Solo lectura. Ver portada.py."""
+    from ft_news import portada
+    return portada.armar(conn)
+
+
 @app.get("/news/costos", dependencies=[Depends(_auth)])
 def costos_get(conn=Depends(_conn)):
     cfg = config.leer_config(conn)
