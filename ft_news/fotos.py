@@ -37,7 +37,7 @@ UA = "FullTennis-FTNEWS/7.6 (fotos con licencia de Wikimedia Commons; portada de
 LICENCIAS_OK = re.compile(r"^(cc0|cc[ -]?0|public domain|pd|cc by( |-)?(\d|sa))", re.IGNORECASE)
 REBUSCAR_DIAS = 30
 REINTENTO_ERROR_H = 24
-POR_VUELTA = 6
+POR_VUELTA = 15          # v7.7: también la agenda (≈ 60 por hora con el ciclo de 15 min)
 
 _TABLA = """
 CREATE TABLE IF NOT EXISTS news_foto (
@@ -222,11 +222,17 @@ def completar(conn, cfg: dict, ids, ahora: Optional[datetime] = None, cli: Optio
 
 
 def jugadores_de_portada(conn, ahora: datetime) -> list[int]:
-    """Los jugadores que la portada puede mostrar: alertas vivas y noticias externas recientes."""
+    """Los jugadores que la portada puede mostrar: alertas vivas, noticias externas recientes y la agenda."""
     ids = [r[0] for r in conn.execute(
         "SELECT DISTINCT jugador_id FROM news_alerta WHERE creado_en >= ? AND jugador_id IS NOT NULL ORDER BY id DESC LIMIT 40",
         ((ahora - timedelta(days=3)).isoformat(),))]
     ids += [r[0] for r in conn.execute(
         "SELECT DISTINCT jugador_id FROM news_evento WHERE creado_en >= ? AND COALESCE(origen,'EXTERNO')='EXTERNO' "
         "ORDER BY id DESC LIMIT 60", ((ahora - timedelta(days=3)).isoformat(),))]
+    # v7.7: después, los de la agenda (los partidos más cercanos primero)
+    for r in conn.execute(
+            "SELECT jugador1_id, jugador2_id FROM news_partido WHERE fecha_estimada >= ? AND fecha_estimada <= ? "
+            "AND COALESCE(estado,'PROGRAMADO') NOT IN ('JUGADO','SIN_RESULTADO','DUPLICADO') ORDER BY fecha_estimada LIMIT 200",
+            ((ahora - timedelta(hours=1)).isoformat(), (ahora + timedelta(hours=30)).isoformat())):
+        ids += [i for i in (r[0], r[1]) if i]
     return list(dict.fromkeys(ids))

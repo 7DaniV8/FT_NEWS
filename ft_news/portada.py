@@ -24,6 +24,11 @@ v7.6 (13/10/2026, Rubén: «¿qué es partido interesante?, si le doy clic se de
 encontró»): `detalle_partido` y `detalle_noticia` arman, también solo con datos para usuarios, lo que muestra el
 modal. Y la portada deja fuera las alertas viejas que hoy no saldrían (resultado de dobles, o «el mercado ya la
 tenía»: v7.5).
+
+v7.7 (13/10/2026 noche, Rubén: «que en estos partidos también tenga la posibilidad de ver el modal»): cualquier
+partido de la agenda abre `detalle_agenda` — los dos jugadores (foto o tarjeta), UTR y cuotas, qué investigó FT NEWS
+de cada uno (cuándo, cuántas búsquedas y artículos), las noticias de un medio y los datos calculados, y por qué no
+salió alerta (la última evaluación, en palabras). Si el partido sí tiene alerta, el modal es el de la alerta.
 """
 from __future__ import annotations
 
@@ -36,7 +41,7 @@ from typing import Optional
 from ft_news import config, descubridor, explicar, fotos, textos
 from ft_news import taxonomia as tx
 
-VERSION = "portada-v2-20261013"
+VERSION = "portada-v3-20261013"
 DIAS_NOTICIAS = 3
 HORAS_AGENDA = 30
 MAX_NOTICIAS = 14
@@ -390,7 +395,8 @@ def agenda(conn, ahora: datetime, marcadas: Optional[dict] = None) -> list[dict]
         else:
             marca = "sin alerta"
         j1, j2 = jug.get(f["jugador1_id"]) or {}, jug.get(f["jugador2_id"]) or {}
-        out.append({"id": f["id"], "hora": f["fecha_estimada"], "torneo": f.get("torneo"), "ronda": f.get("ronda"),
+        out.append({"id": f["id"], "partido_id": f["id"], "hora": f["fecha_estimada"], "torneo": f.get("torneo"), "ronda": f.get("ronda"),
+                    "jugador1_id": f["jugador1_id"], "jugador2_id": f["jugador2_id"],
                     "circuito": CIRCUITO_ES.get((f.get("circuito") or "").lower(), ""),
                     "seccion": _seccion(f.get("circuito"), f.get("torneo"), f.get("genero")),
                     "jugador1": j1.get("nombre") or f.get("jugador1_nombre"), "jugador2": j2.get("nombre") or f.get("jugador2_nombre"),
@@ -401,6 +407,14 @@ def agenda(conn, ahora: datetime, marcadas: Optional[dict] = None) -> list[dict]
     out.sort(key=lambda x: (0 if x["destacado"] else 1, x["hora"] or ""))
     top = out[:MAX_AGENDA]
     top.sort(key=lambda x: x["hora"] or "")
+    # v7.7: la foto (o la tarjeta) de los dos jugadores, también en la agenda
+    try:
+        fts = fotos.de_jugadores(conn, {x["jugador1_id"] for x in top} | {x["jugador2_id"] for x in top})
+    except sqlite3.OperationalError:                 # base vieja sin la tabla de fotos
+        fts = {}
+    for x in top:
+        x["imagenes"] = [dict(fts[i], nombre=n) if i in fts else _tarjeta(dict(jug.get(i) or {}, nombre=n))
+                         for i, n in ((x["jugador1_id"], x["jugador1"]), (x["jugador2_id"], x["jugador2"]))]
     return top
 
 
@@ -555,3 +569,109 @@ def detalle_noticia(conn, evento_id: int, ahora: Optional[datetime] = None) -> O
     _poner_fotos(conn, [n])
     return {"noticia": n, "otras": otras, "dobles": tx.es_dobles(ev),
             "proximo_partido": {k: prox.get(k) for k in ("torneo", "fecha_estimada", "rival")} if prox else None}
+
+
+# ═════════════════════════════════════════════════════════════════════
+# v7.7 · el modal de CUALQUIER partido de la agenda (con o sin alerta)
+# ═════════════════════════════════════════════════════════════════════
+
+SIN_ALERTA_ES = ("Sin alerta: FT NEWS vigila a estos jugadores, pero no encontró una noticia de un medio que cambie el "
+                 "partido. Abajo está lo que investigó de cada uno.")
+
+
+def _frescura(conn, jugador_id: Optional[int], ahora: datetime) -> Optional[dict]:
+    if not jugador_id:
+        return None
+    from ft_news.alertas import frescura
+    rf = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        f = frescura(conn, jugador_id, ahora, 72)
+    except sqlite3.OperationalError:                 # base vieja sin la cola del radar
+        return None
+    finally:
+        conn.row_factory = rf
+    if f.get("hace_h") is None:
+        txt = "Todavía no se investigó (está en la cola del radar)."
+    else:
+        h = f["hace_h"]
+        cuando = "hace menos de 1 hora" if h < 1 else (f"hace {round(h)} h" if h < 48 else f"hace {round(h / 24)} días")
+        txt = (f"Investigado {cuando}: {f['busquedas']} búsqueda(s) y {f['articulos']} artículo(s) leído(s) en los "
+               f"últimos 3 días; {f['externos']} noticia(s) de un medio.")
+    return {"texto": txt, "reciente": f["reciente"], "hace_h": f["hace_h"], "busquedas": f["busquedas"],
+            "articulos": f["articulos"], "externas": f["externos"]}
+
+
+def detalle_agenda(conn, partido_id: int, ahora: Optional[datetime] = None) -> Optional[dict]:
+    """Lo que muestra el modal de un partido de la agenda. Solo lectura, para usuarios (sin códigos del motor)."""
+    ahora = ahora or datetime.now(timezone.utc)
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    p = cur.execute("SELECT * FROM news_partido WHERE id=?", (int(partido_id),)).fetchone()
+    if not p:
+        return None
+    p = dict(p)
+    ids = [p.get("jugador1_id"), p.get("jugador2_id")]
+    jug = _jugadores(conn, set(ids))
+    j1, j2 = jug.get(ids[0]) or {}, jug.get(ids[1]) or {}
+    n1, n2 = j1.get("nombre") or p.get("jugador1_nombre"), j2.get("nombre") or p.get("jugador2_nombre")
+    # ¿tiene una alerta 🔎/🔥 que la portada mostraría? Entonces el modal es el de la alerta.
+    prueba = "AND COALESCE(prueba,0)=0" if "prueba" in _cols(conn, "news_alerta") else ""
+    alerta_id = None
+    for a in cur.execute(f"SELECT a.*, e.motivo AS eval_motivo FROM news_alerta a LEFT JOIN news_evaluacion e ON e.id=a.evaluacion_id "
+                         f"WHERE a.partido_id=? AND a.tipo IN ('FUEGO','FUEGO_EXPERIMENTAL','INTERESANTE') "
+                         f"AND COALESCE(a.dicho_discord,0)<>2 {prueba} ORDER BY a.id DESC", (p["id"],)).fetchall():
+        a = dict(a)
+        try:
+            usados = [int(i) for i in json.loads(a.get("evento_ids_json") or "[]") or []]
+        except (TypeError, ValueError):
+            usados = []
+        evs = {r["id"]: dict(r) for r in cur.execute(
+            "SELECT * FROM news_evento WHERE id IN (%s)" % ",".join("?" * len(usados)), tuple(usados)).fetchall()} if usados else {}
+        if vigente_hoy(a, evs):
+            alerta_id = a["id"]
+            break
+    # la última evaluación del partido: por qué (no) salió alerta
+    ev_row = cur.execute("SELECT * FROM news_evaluacion WHERE partido_id=? ORDER BY id DESC LIMIT 1", (p["id"],)).fetchone()
+    ev_row = dict(ev_row) if ev_row else {}
+    motivo = explicar.motivo_simple(ev_row.get("motivo")) if ev_row else ""
+    if ev_row.get("motivo") in (None, "", "SIN_EVENTOS"):
+        motivo = "No encontró noticias ni datos que cambien este partido." if ev_row else ""
+    # noticias de un medio y datos calculados de los dos (últimos 21 días)
+    evs = _eventos_de(conn, ids, ahora, 21)
+    noticias, calculados = [], []
+    for e in evs:
+        j = jug.get(e["jugador_id"]) or {}
+        if descubridor.es_externo(e):
+            n = _evento_publico(e, j)
+            n["dobles"] = tx.es_dobles(e)
+            noticias.append(n)
+        else:
+            calculados.append({"jugador": j.get("nombre"), "texto": explicar.evento_simple(e, j.get("nombre")),
+                               "fecha": _iso(_fecha_ev(e))})
+    noticias.sort(key=lambda n: n.get("fecha") or "", reverse=True)
+    try:
+        fts = fotos.de_jugadores(conn, set(ids))
+    except sqlite3.OperationalError:
+        fts = {}
+    jugadores = []
+    for jid, j, n in ((ids[0], j1, n1), (ids[1], j2, n2)):
+        img = dict(fts[jid], nombre=n) if jid in fts else _tarjeta(dict(j, nombre=n))
+        jugadores.append(dict(img, jugador_id=jid, investigacion=_frescura(conn, jid, ahora),
+                              noticias=sum(1 for x in noticias if x.get("jugador_id") == jid)))
+    if alerta_id:
+        resumen = "Este partido tiene una alerta de FT NEWS: el detalle completo está en la alerta."
+    elif noticias:
+        resumen = ("Hay noticias de un medio sobre estos jugadores, pero no alcanzan para una alerta"
+                   + (f": {motivo[0].lower() + motivo[1:]}" if motivo else "."))
+    else:
+        resumen = SIN_ALERTA_ES
+    return {"id": p["id"], "alerta_id": alerta_id, "tipo": "CON_ALERTA" if alerta_id else "SIN_ALERTA",
+            "etiqueta": "CON ALERTA" if alerta_id else "SIN ALERTA", "que_es": resumen,
+            "partido": {"jugador": n1, "rival": n2, "torneo": p.get("torneo"), "ronda": p.get("ronda"), "hora": p.get("fecha_estimada"),
+                        "circuito": CIRCUITO_ES.get((p.get("circuito") or "").lower(), ""),
+                        "utr": [_utr(j1.get("utr_singles")), _utr(j2.get("utr_singles"))],
+                        "cuotas": [_cuota(p.get("cuota1")), _cuota(p.get("cuota2"))]},
+            "jugadores": jugadores,
+            "evaluado": {"cuando": ev_row.get("creado_en"), "por_que": motivo} if ev_row else None,
+            "noticias": noticias[:12], "datos_calculados": calculados[:8]}

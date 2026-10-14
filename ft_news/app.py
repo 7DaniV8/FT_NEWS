@@ -398,6 +398,17 @@ def portada_partido(alerta_id: int, conn=Depends(_conn)):
     return d
 
 
+@app.get("/news/portada/agenda/{partido_id}", dependencies=[Depends(_auth)])
+def portada_agenda(partido_id: int, conn=Depends(_conn)):
+    """v7.7: el modal de cualquier partido de la agenda (con o sin alerta): qué investigó FT NEWS de los dos y por qué
+    no salió alerta. Solo lectura."""
+    from ft_news import portada
+    d = portada.detalle_agenda(conn, partido_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No existe ese partido en la agenda.")
+    return d
+
+
 @app.get("/news/portada/noticia/{evento_id}", dependencies=[Depends(_auth)])
 def portada_noticia(evento_id: int, conn=Depends(_conn)):
     """v7.6: el modal de una noticia de la portada. Solo lectura."""
