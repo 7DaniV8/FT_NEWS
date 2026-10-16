@@ -10,6 +10,7 @@ ft_news/app.py — API de FT_NEWS (Fase 0).
   GET  /news/senales               lo que FT Intelligence recogería: vacío con NEWS_DISCORD_ACTIVO=0
   GET  /news/costos                hoy y mes
   GET  /news/jugadores/{id}/memoria   línea de tiempo (lectura contextual)
+  GET  /news/control               v7.9: 📋 partido por partido, qué está mirando y haciendo (solo lectura)
 Todo menos /salud exige X-FT-News-Secret = FT_NEWS_SECRET.
 """
 from __future__ import annotations
@@ -120,6 +121,13 @@ def config_post(body: ConfigIn, conn=Depends(_conn)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "efectivo": config.leer_config(conn)[body.clave]}
+
+
+@app.get("/news/control", dependencies=[Depends(_auth)])
+def control_get(horas_atras: int = 12, horas_adelante: int = 48, conn=Depends(_conn)):
+    """v7.9 (16/10/2026, Rubén: «no sé si están funcionando o leyendo o qué están haciendo»)."""
+    from ft_news import control as ctl
+    return ctl.control(conn, max(1, min(horas_atras, 72)), max(1, min(horas_adelante, 96)))
 
 
 @app.get("/news/fuentes", dependencies=[Depends(_auth)])
