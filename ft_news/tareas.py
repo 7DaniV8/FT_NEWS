@@ -29,7 +29,7 @@ from ft_news.db import ahora_iso, estado_set, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
 
-PASOS = ("padron", "calibracion", "partidos", "contexto", "radar", "rss", "descubridor", "cierre", "costos")
+PASOS = ("padron", "calibracion", "partidos", "contexto", "radar", "rss", "telegram", "descubridor", "cierre", "costos")
 PADRON_CADA_H = 6
 CALIBRACION_CADA_H = 6
 CAIDO_REINTENTO_H = 6          # un clasificador caído (clave/modelo) se vuelve a probar a las 6 h
@@ -235,6 +235,11 @@ def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=No
         paso("rss", _rss)
     else:
         resumen["pasos"]["rss"] = "al día" if clasificador is not None else {"motivo": "SIN_CLAVES"}
+    # v8.0: pistas de Telegram (las que no se leyeron al llegar, reintentos y vencimiento de las no confirmadas)
+    def _telegram():
+        from ft_news.lectores import telegram
+        return telegram.procesar(conn, cfg, clasificador, ahora)
+    paso("telegram", _telegram)
     paso("descubridor", lambda: evaluador.correr(conn, cfg, ahora))
     paso("alertas_vencidas", lambda: {"vencidas": alertas.vencer_pendientes(conn, cfg, ahora)})
     # v7.6: fotos con licencia (Wikimedia Commons) de los jugadores que puede mostrar la portada. Pocas por vuelta;
@@ -252,6 +257,24 @@ def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=No
     estado_set(conn, "motivo", "activo")
     resumen["motivo"] = "OK"
     return resumen
+
+
+def procesar_pistas_ya() -> dict:
+    """v8.0: lee enseguida las pistas de Telegram recién llegadas (en un hilo, al recibirlas), sin esperar el ciclo."""
+    conn = get_conn()
+    try:
+        cfg = config.leer_config(conn)
+        if not cfg["NEWS_ACTIVO"]:
+            return {"motivo": "APAGADO"}
+        _t, gemini, claude = _proveedores(cliente_tavily=False)
+        clasificador, _seg = elegir_clasificador(cfg, gemini, claude, estado_todo(conn))
+        from ft_news.lectores import telegram
+        return telegram.procesar(conn, cfg, clasificador, limite=10)
+    except Exception as e:                                       # pragma: no cover
+        log.warning("[FT_NEWS] pistas: %s", e)
+        return {"error": str(e)[:200]}
+    finally:
+        conn.close()
 
 
 class Worker(threading.Thread):

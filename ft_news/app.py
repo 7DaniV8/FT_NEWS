@@ -616,3 +616,32 @@ def diagnostico_get(conn=Depends(_conn), dias: int = 7):
             "costos_por_proveedor": costos_prov, "cola": cola, "errores": errores, "pasos": pasos,
             "partidos": {"unicos": partidos_unicos, "duplicados_fundidos": duplicados},
             "alertas": _alertas_resumen(conn), "clasificador": (est.get("clasificador") or {}).get("valor")}
+
+
+# ── v8.0 (18/10/2026): 📡 pistas de canales de Telegram ─────────────────────────────────────────────
+class PistaIn(BaseModel):
+    texto: str
+    canal_id: Optional[str] = None
+    canal: Optional[str] = None
+    chat_id: Optional[str] = None
+    msg_id: Optional[int] = None
+    modo: Optional[str] = "lesiones"
+    fecha: Optional[str] = None
+
+
+@app.post("/news/telegram/pista", dependencies=[Depends(_auth)])
+def telegram_pista(body: PistaIn, conn=Depends(_conn)):
+    """La manda RankingFTR (que la recibe de Reenvio_MTO). Se guarda enseguida y se lee en un hilo aparte: una
+    pista sola nunca es noticia ni alerta; si es fuerte, el radar la busca en las fuentes autorizadas."""
+    from ft_news.lectores import telegram
+    r = telegram.recibir(conn, body.model_dump())
+    if r.get("ok") and r.get("nuevo") and os.getenv("FT_NEWS_SIN_WORKER", "0") != "1":
+        import threading
+        threading.Thread(target=tareas.procesar_pistas_ya, daemon=True, name="ft-news-pista").start()
+    return r
+
+
+@app.get("/news/telegram/pistas", dependencies=[Depends(_auth)])
+def telegram_pistas(conn=Depends(_conn), limite: int = 100, estado: str = ""):
+    from ft_news.lectores import telegram
+    return telegram.listar(conn, max(1, min(limite, 500)), estado or None)

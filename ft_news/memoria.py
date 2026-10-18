@@ -234,6 +234,12 @@ def guardar_evento_db(conn, ev: dict) -> int:
         return nuevo_id
     nuevo_id = ejecutar_con_reintento(_w, conn=conn)
     ev["id"] = nuevo_id
+    # v8.0: una noticia vigente de fuente permitida confirma las pistas de Telegram del mismo jugador y tipo
+    try:
+        from ft_news.lectores import telegram
+        telegram.confirmar_por_evento(conn, ev, nuevo_id)
+    except Exception:                                        # pragma: no cover — nunca tumba el guardado
+        pass
     return nuevo_id
 
 

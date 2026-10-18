@@ -29,6 +29,7 @@ Diseño aprobado: *FT NEWS INTELLIGENCE — Diseño definitivo (v2)* (documento 
 | `ft_news/diagnostico_carga.py` | **v7**: diagnóstico de las reglas de carga: qué marcaba la regla anterior, cuántas evaluaciones salieron solo de estadística interna, duplicados, resultados del "cargado", distribución de partidos/sets/games/descanso y cómo caería cada muestra con los umbrales de hoy (`/news/diagnostico` → `carga`) | listo |
 | `ft_news/cierre.py` | Motor 5: resultado desde match_log, retiro → evento, cuota de cierre, "¿mercado hacia la noticia?", R4 de la memoria, marca "¿era interesante?" | listo |
 | `ft_news/excel.py` | HISTORICO + RESUMEN (openpyxl), frecuencias observadas | listo |
+| `ft_news/lectores/telegram.py` | **v8.0**: 📡 pistas de canales de Telegram (elegidos en Admin de RankingFTR, los lee Reenvio_MTO): duplicados entre canales, jugador por apellido, solo lesión/baja/retiro/regreso, resumen propio; lo fuerte adelanta al jugador en el radar y solo lo que confirma una fuente autorizada sigue a alertas | listo |
 | `ft_news/lectores/rss.py` | RSS de las fuentes autorizadas, gratis; coincidencias con **todo el padrón** (v5) pasan al clasificador | listo |
 | `ft_news/lectores/itf_listas.py` | acceptance lists ITF (WD → RETIRO_ABANDONO nivel A); se niega sin autorización | listo (bloqueado por D-ITF) |
 | `ft_news/proveedores/claude.py` | segunda lectura (Claude Haiku) de lo fuerte; discrepancia → nivel C; opcional | listo |

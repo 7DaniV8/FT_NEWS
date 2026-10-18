@@ -122,6 +122,14 @@ PARAMETROS = (
     ("NEWS_CARGA_EXCEPCIONAL_PARTIDOS_7D", 6, "int", "≥ N partidos en 7 días → carga EXCEPCIONAL (evento negativo; igual no da 🔥 sola)."),
     ("NEWS_CARGA_EXCEPCIONAL_TRES_SETS_7D", 5, "int", "≥ N partidos a 3+ sets en 7 días → EXCEPCIONAL."),
     ("NEWS_CARGA_INACTIVIDAD_DIAS", 10, "int", "≥ N días sin competir → INACTIVIDAD (se guarda y se informa; sin ventaja ni castigo)."),
+    # v8.0 (18/10/2026, Rubén: «que se puedan configurar todos desde el Admin»): canales de Telegram como PISTAS.
+    ("NEWS_TELEGRAM_ACTIVO", 1, "bool",
+     "1 = las pistas de los canales de Telegram (elegidos en Admin de RankingFTR, los lee Reenvio_MTO) se leen: si son "
+     "fuertes, el jugador pasa al frente del radar y solo lo que confirme una fuente autorizada sigue a alertas. "
+     "0 = se guardan sin leer."),
+    ("NEWS_TELEGRAM_MAX_DIA", 80, "int", "Tope diario de pistas de Telegram leídas con IA."),
+    ("NEWS_TELEGRAM_CONFIRMAR_H", 72, "int",
+     "Horas que una pista fuerte espera confirmación de una fuente autorizada; después queda SIN_CONFIRMAR (nunca sale)."),
     ("NEWS_IDIOMAS", "en,es,it,fr,pt,de", "str", "Idiomas de búsqueda (v7.8: + alemán)."),
     ("NEWS_CIRCUITOS", "atp,wta,challenger,wta125,itf,utr", "str", "Circuitos dentro del proyecto."),
 )
