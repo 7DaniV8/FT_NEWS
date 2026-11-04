@@ -130,6 +130,13 @@ PARAMETROS = (
     ("NEWS_TELEGRAM_MAX_DIA", 80, "int", "Tope diario de pistas de Telegram leídas con IA."),
     ("NEWS_TELEGRAM_CONFIRMAR_H", 72, "int",
      "Horas que una pista fuerte espera confirmación de una fuente autorizada; después queda SIN_CONFIRMAR (nunca sale)."),
+    # v8.1 (04/11/2026): 📡 LIVE — flujo cronológico automático de novedades (ver live.py).
+    ("NEWS_LIVE_ACTIVO", 1, "bool", "1 = FT NEWS arma el flujo LIVE (noticias confirmadas, calculados y mesa de redacción). 0 = no se actualiza."),
+    ("NEWS_LIVE_PISTAS", 0, "bool",
+     "1 = el LIVE también enseña pistas de Telegram aún NO confirmadas, siempre rotuladas SIN_CONFIRMAR. 0 (recomendado hasta que "
+     "Rubén lo decida) = solo lo confirmado."),
+    ("NEWS_LIVE_CALCULADOS", 1, "bool", "1 = el LIVE añade avisos calculados (jugador con noticia física reciente que juega pronto)."),
+    ("NEWS_LIVE_DIAS", 3, "int", "Días hacia atrás que cubre el LIVE."),
     ("NEWS_IDIOMAS", "en,es,it,fr,pt,de", "str", "Idiomas de búsqueda (v7.8: + alemán)."),
     ("NEWS_CIRCUITOS", "atp,wta,challenger,wta125,itf,utr", "str", "Circuitos dentro del proyecto."),
 )

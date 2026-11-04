@@ -388,6 +388,36 @@ def hoy(conn=Depends(_conn), limite: int = 60):
             "estado": estado_todo(conn), "costos_hoy": costos.hoy(conn), "costos_mes": costos.mes(conn)}
 
 
+@app.get("/news/live", dependencies=[Depends(_auth)])
+def live_get(limite: int = 60, etiqueta: str = "", sin_confirmar: int = 1, desde_id: int = 0, borradores: int = 0, conn=Depends(_conn)):
+    """v8.1: flujo LIVE (novedades de más nueva a más vieja, con etiqueta y nivel CONFIRMADO/SIN_CONFIRMAR). Solo lectura."""
+    from ft_news import live
+    return live.listar(conn, limite, etiqueta or None, bool(sin_confirmar), desde_id, bool(borradores))
+
+
+@app.post("/news/live/manual", dependencies=[Depends(_auth)])
+def live_manual(datos: dict, conn=Depends(_conn)):
+    """v8.1: mesa de redacción — una entrada escrita a mano (PUBLICADO o BORRADOR)."""
+    from ft_news import live
+    try:
+        return live.manual(conn, datos, str(datos.get("por") or "admin")[:60])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/news/live/{live_id}/estado", dependencies=[Depends(_auth)])
+def live_estado(live_id: int, datos: dict, conn=Depends(_conn)):
+    """v8.1: aprobar un borrador (PUBLICADO) u ocultar una entrada (OCULTO)."""
+    from ft_news import live
+    try:
+        ok = live.cambiar_estado(conn, live_id, str(datos.get("estado") or ""), str(datos.get("por") or "admin")[:60])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="No existe esa entrada.")
+    return {"ok": True}
+
+
 @app.get("/news/portada", dependencies=[Depends(_auth)])
 def portada_get(conn=Depends(_conn)):
     """v7.4 (13/10/2026): la portada tipo periódico (titular, partidos interesantes, noticias, lesiones y agenda),

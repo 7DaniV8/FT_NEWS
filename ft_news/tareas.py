@@ -29,7 +29,7 @@ from ft_news.db import ahora_iso, estado_set, estado_todo, get_conn
 
 log = logging.getLogger("ft_news")
 
-PASOS = ("padron", "calibracion", "partidos", "contexto", "radar", "rss", "telegram", "descubridor", "cierre", "costos")
+PASOS = ("padron", "calibracion", "partidos", "contexto", "radar", "rss", "telegram", "live", "descubridor", "cierre", "costos")
 PADRON_CADA_H = 6
 CALIBRACION_CADA_H = 6
 CAIDO_REINTENTO_H = 6          # un clasificador caído (clave/modelo) se vuelve a probar a las 6 h
@@ -240,6 +240,10 @@ def ciclo(conn, cliente=None, cfg: Optional[dict] = None, tavily=None, gemini=No
         from ft_news.lectores import telegram
         return telegram.procesar(conn, cfg, clasificador, ahora)
     paso("telegram", _telegram)
+    def _live():
+        from ft_news import live
+        return live.sincronizar(conn, cfg, ahora)
+    paso("live", _live)       # v8.1: flujo LIVE automático
     paso("descubridor", lambda: evaluador.correr(conn, cfg, ahora))
     paso("alertas_vencidas", lambda: {"vencidas": alertas.vencer_pendientes(conn, cfg, ahora)})
     # v7.6: fotos con licencia (Wikimedia Commons) de los jugadores que puede mostrar la portada. Pocas por vuelta;
