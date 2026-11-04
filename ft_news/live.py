@@ -137,6 +137,7 @@ def desde_pistas(conn, cfg, ahora: datetime) -> dict:
     filas = [dict(r) for r in cur.execute(
         "SELECT id, jugador_id, categoria, estado, titular, resumen_es, recibido_en, fecha_mensaje FROM news_pista "
         "WHERE recibido_en >= ? AND jugador_id IS NOT NULL AND categoria IS NOT NULL "
+        "AND COALESCE(canal_id,'') != 'tennisalerta' AND COALESCE(canal,'') NOT LIKE 'TennisAlerta%' "
         "AND estado IN ('VERIFICANDO','CONFIRMADA','SIN_CONFIRMAR') ORDER BY id DESC LIMIT 300",
         ((ahora - timedelta(days=dias)).isoformat(),)).fetchall()]
     jug = portada._jugadores(conn, {f["jugador_id"] for f in filas})
