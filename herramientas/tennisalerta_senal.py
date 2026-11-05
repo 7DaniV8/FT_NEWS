@@ -252,6 +252,31 @@ def _una_vuelta(pw_ctx, url: str, diagnostico: bool = False):
     return extraer(capturas), (parada[0] if parada else None)
 
 
+def sesion_leer_de_ft_news(base: str, secreto: str) -> str:
+    """Trae NEWS_TENNISALERTA_SESION guardada en el Admin (GET /news/config)."""
+    req = urllib.request.Request(base.rstrip("/") + "/news/config",
+                                 headers={"X-FT-News-Secret": secreto}, method="GET")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        datos = json.loads(r.read().decode())
+    for p in datos.get("parametros", []):
+        if p.get("clave") == "NEWS_TENNISALERTA_SESION":
+            return str(p.get("valor") or "")
+    return ""
+
+
+def sesion_guardar_en_ft_news(base: str, secreto: str, sesion_json: str) -> bool:
+    """Guarda la sesión en el Admin (POST /news/config), para no depender de pegarla a mano."""
+    req = urllib.request.Request(base.rstrip("/") + "/news/config",
+                                 data=json.dumps({"clave": "NEWS_TENNISALERTA_SESION", "valor": sesion_json, "por": "login-local"}).encode(),
+                                 headers={"Content-Type": "application/json", "X-FT-News-Secret": secreto}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return 200 <= r.status < 300
+    except Exception as e:  # noqa: BLE001
+        print("  no se pudo guardar la sesión en el Admin:", e)
+        return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default=os.getenv("TA_URL", ""), help="dirección de la página del LIVE (la que abres normalmente)")
@@ -261,6 +286,8 @@ def main(argv=None) -> int:
     ap.add_argument("--login", action="store_true", help="abre el navegador para que inicies sesión a mano")
     ap.add_argument("--una-vez", action="store_true")
     ap.add_argument("--diagnostico", action="store_true", help="solo muestra qué rutas JSON carga la página (sin enviar nada)")
+    ap.add_argument("--nube", action="store_true",
+                    help="modo Railway: sin pantalla, lee la sesión del Admin (NEWS_TENNISALERTA_SESION) en vez de --perfil")
     ap.add_argument("--seco", action="store_true", help="no envía nada a FT NEWS, solo muestra")
     a = ap.parse_args(argv)
     if not a.url:
@@ -275,19 +302,50 @@ def main(argv=None) -> int:
     if not a.seco and not a.login and (not base or not sec):
         print("Faltan FT_NEWS_URL y FT_NEWS_SECRET (o usa --seco).")
         return 2
+    if a.nube and (not base or not sec):
+        print("--nube necesita FT_NEWS_URL y FT_NEWS_SECRET para leer la sesión del Admin.")
+        return 2
     perfil = Path(a.perfil)
     perfil.mkdir(parents=True, exist_ok=True)
     mem = Memoria(perfil / "estado.json")
     enviar_live = (lambda l: (print(f"  [seco] LIVE x{len(l)}:", " / ".join(f"{x['etiqueta']}·{x['jugador']}" for x in l[:6]), "…") or True)) if a.seco else enviar_live_a_ft_news(base, sec)
     enviar = (lambda c: (print("  [seco]", c["texto"].replace("\n", " | ")) or True)) if a.seco else enviar_a_ft_news(base, sec)
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(str(perfil / "navegador"), headless=not a.login)
-        try:
-            if a.login:
+        if a.login:
+            ctx = p.chromium.launch_persistent_context(str(perfil / "navegador"), headless=False)
+            try:
                 pg = ctx.new_page()
                 pg.goto(a.url)
                 input("Inicia sesión en la ventana. Cuando veas el LIVE, vuelve aquí y pulsa Enter para guardar la sesión…")
-                return 0
+                sesion = json.dumps(ctx.storage_state())
+                ruta = perfil / "sesion_nube.json"
+                ruta.write_text(sesion, "utf-8")
+                print(f"\nGuardada también en: {ruta}")
+                if base and sec:
+                    if sesion_guardar_en_ft_news(base, sec, sesion):
+                        print("Y subida directo al Admin (NEWS_TENNISALERTA_SESION). Ya puedes usar --nube en Railway.")
+                    else:
+                        print("No se pudo subir sola. Abre ese archivo, copia su contenido completo y pégalo en el Admin, "
+                              "en «Roles que la hoja nunca toca»... (perdón, en el campo NEWS_TENNISALERTA_SESION) → guardar.")
+                else:
+                    print("Pon FT_NEWS_URL y FT_NEWS_SECRET y repite --login para subirla sola, o copia el contenido de ese "
+                          "archivo y pégalo a mano en el Admin, en el campo NEWS_TENNISALERTA_SESION.")
+            finally:
+                ctx.close()
+            return 0
+        if a.nube:
+            sesion = sesion_leer_de_ft_news(base, sec)
+            if not sesion.strip():
+                print("No hay ninguna sesión guardada en el Admin (NEWS_TENNISALERTA_SESION). Corre --login en tu "
+                      "computador primero (con FT_NEWS_URL/FT_NEWS_SECRET puestos para que se suba sola).")
+                return 2
+            sesion_tmp = perfil / "sesion_nube.json"
+            sesion_tmp.write_text(sesion, "utf-8")
+            navegador = p.chromium.launch(headless=True)
+            ctx = navegador.new_context(storage_state=str(sesion_tmp))
+        else:
+            ctx = p.chromium.launch_persistent_context(str(perfil / "navegador"), headless=True)
+        try:
             while True:
                 items, parada = _una_vuelta(ctx, a.url, a.diagnostico)
                 if parada:

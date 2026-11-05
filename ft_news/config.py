@@ -40,6 +40,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()      # segunda le
 
 # ── Interruptores y topes: defaults. (clave, valor_default, tipo, descripción)
 PARAMETROS = (
+    ("NEWS_TENNISALERTA_SESION", "", "str", "Sesión del navegador de TennisAlerta (JSON de storage_state de Playwright), "
+     "para que el recolector corra en Railway sin pantalla. Se genera en tu computador con "
+     "«tennisalerta_senal.py --login» y se pega aquí tal cual. No lleva tu usuario ni contraseña, solo la sesión."),
     ("NEWS_ACTIVO", 1, "bool", "Interruptor general. 0 = el worker no llama a nadie. (08/10/2026: nace encendido, "
                                "decisión de Rubén: un solo despliegue.)"),
     ("NEWS_BANDAS_CALIBRADAS", 0, "bool",
