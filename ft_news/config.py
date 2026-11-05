@@ -137,6 +137,10 @@ PARAMETROS = (
      "Rubén lo decida) = solo lo confirmado."),
     ("NEWS_LIVE_CALCULADOS", 1, "bool", "1 = el LIVE añade avisos calculados (jugador con noticia física reciente que juega pronto)."),
     ("NEWS_LIVE_DIAS", 3, "int", "Días hacia atrás que cubre el LIVE."),
+    ("NEWS_LIVE_VIAJES", 1, "bool", "1 = el LIVE añade avisos de viaje ciudad a ciudad (distancia, horas estimadas y cambio de huso) para quien juega pronto."),
+    ("NEWS_LIVE_VIAJE_KM_MIN", 1500, "int", "Un aviso de viaje sale si la distancia entre las dos ciudades es al menos esta (km)…"),
+    ("NEWS_LIVE_VIAJE_HUSO_MIN", 3, "int", "…o si el cambio de huso horario es al menos esta cantidad de horas."),
+    ("NEWS_LIVE_VIAJE_DIAS_MAX", 4, "int", "Solo si pasaron como máximo estos días entre el último partido y el siguiente."),
     ("NEWS_IDIOMAS", "en,es,it,fr,pt,de", "str", "Idiomas de búsqueda (v7.8: + alemán)."),
     ("NEWS_CIRCUITOS", "atp,wta,challenger,wta125,itf,utr", "str", "Circuitos dentro del proyecto."),
 )

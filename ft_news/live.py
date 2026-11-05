@@ -17,7 +17,7 @@ from typing import Optional
 
 from ft_news import portada
 
-ETIQUETAS = ("ENTRY LIST", "INFORMACIÓN", "DECLARACIONES", "MOLESTIAS", "LESIÓN", "SEGUIMIENTO")
+ETIQUETAS = ("ENTRY LIST", "INFORMACIÓN", "DECLARACIONES", "MOLESTIAS", "LESIÓN", "DESGASTE", "VIAJES", "SEGUIMIENTO")
 ESTADOS = ("PUBLICADO", "BORRADOR", "OCULTO")
 ORIGENES = ("EVENTO", "PISTA", "CALCULADO", "MANUAL")
 MAX_LISTA = 200
@@ -29,7 +29,7 @@ ETIQUETA_DE = {
     "DECLARACION_PREPARACION": "DECLARACIONES", "DECLARACION_MOTIVACION": "DECLARACIONES",
     "REGRESO": "INFORMACIÓN", "SANCION_DISCIPLINA": "INFORMACIÓN", "CAMBIO_EQUIPO": "INFORMACIÓN",
     "SITUACION_PERSONAL": "INFORMACIÓN", "PUNTOS_DEFENDIDOS": "INFORMACIÓN", "RANKING_OBJETIVO": "INFORMACIÓN",
-    "VIAJE_CALENDARIO": "INFORMACIÓN", "CARGA_FISICA": "SEGUIMIENTO",
+    "VIAJE_CALENDARIO": "VIAJES", "CARGA_FISICA": "DESGASTE",
 }
 
 _ESQUEMA = """
@@ -70,7 +70,7 @@ def _tiene(conn, tabla: str) -> bool:
 
 def _poner(conn, f: dict) -> str:
     """Inserta o actualiza por clave. Devuelve 'nuevo' | 'actualizado' | 'igual'. Una fila OCULTA a mano NO se reabre sola."""
-    r = conn.execute("SELECT id, nivel, estado, titulo, texto FROM news_live WHERE clave=?", (f["clave"],)).fetchone()
+    r = conn.execute("SELECT id, nivel, estado, titulo, texto, etiqueta FROM news_live WHERE clave=?", (f["clave"],)).fetchone()
     if r is None:
         conn.execute(
             "INSERT INTO news_live (clave, ocurrio_en, publicado_en, etiqueta, titulo, texto, jugador_id, jugador, torneo, circuito, "
@@ -80,6 +80,8 @@ def _poner(conn, f: dict) -> str:
              f.get("enlace"), f.get("ref_id"), f.get("estado", "PUBLICADO"), f.get("por")))
         return "nuevo"
     cambios = {}
+    if f["origen"] in ("EVENTO", "CALCULADO") and f.get("etiqueta") and f["etiqueta"] != r["etiqueta"]:
+        cambios["etiqueta"] = f["etiqueta"]
     if f.get("nivel") and f["nivel"] != r["nivel"]:
         cambios["nivel"] = f["nivel"]
     if f.get("estado") == "OCULTO" and r["estado"] == "PUBLICADO":
@@ -207,6 +209,67 @@ def calculados(conn, cfg, ahora: datetime) -> dict:
     return out
 
 
+def viajes(conn, cfg, ahora: datetime) -> dict:
+    """✈️ Ciudad a ciudad: quien juega pronto y viene de otra ciudad lejos / con otro huso y pocos días de descanso (ver viajes.py).
+    Calculado con nuestras tablas; si no se reconoce la ciudad de un torneo no se inventa nada y se lista en «sin_ciudad»."""
+    if not int(cfg.get("NEWS_LIVE_VIAJES", 1) or 0):
+        return {"activo": 0}
+    from ft_news import viajes as vj
+    km_min = float(cfg.get("NEWS_LIVE_VIAJE_KM_MIN", 1500) or 1500)
+    huso_min = float(cfg.get("NEWS_LIVE_VIAJE_HUSO_MIN", 3) or 3)
+    dias_max = float(cfg.get("NEWS_LIVE_VIAJE_DIAS_MAX", 4) or 4)
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
+    filas = [dict(r) for r in cur.execute(
+        "SELECT id, torneo, circuito, ronda, fecha_estimada, jugador1_id, jugador2_id FROM news_partido "
+        "WHERE fecha_estimada >= ? AND fecha_estimada <= ? AND COALESCE(estado,'PROGRAMADO') NOT IN ('JUGADO','SIN_RESULTADO','DUPLICADO') "
+        "ORDER BY fecha_estimada LIMIT 400",
+        (_iso(ahora - timedelta(hours=1)), _iso(ahora + timedelta(hours=VENTANA_CALCULADO_H)))).fetchall()]
+    jug = portada._jugadores(conn, {f["jugador1_id"] for f in filas} | {f["jugador2_id"] for f in filas})
+    out = {"nuevo": 0, "actualizado": 0, "igual": 0}
+    sin = set()
+    for p in filas:
+        hasta = vj.ciudad_de(p["torneo"])
+        fecha_p = portada._dt(p["fecha_estimada"])
+        if not hasta:
+            sin.add(p["torneo"] or "?")
+            continue
+        for yo, rival in ((p["jugador1_id"], p["jugador2_id"]), (p["jugador2_id"], p["jugador1_id"])):
+            a, b = jug.get(yo) or {}, jug.get(rival) or {}
+            ant = cur.execute(
+                "SELECT torneo, fecha_estimada FROM news_partido WHERE (jugador1_id=? OR jugador2_id=?) AND id<>? AND fecha_estimada < ? "
+                "AND fecha_estimada >= ? AND COALESCE(estado,'') NOT IN ('DUPLICADO') ORDER BY fecha_estimada DESC LIMIT 1",
+                (yo, yo, p["id"], p["fecha_estimada"], _iso(fecha_p - timedelta(days=14)))).fetchone()
+            if not ant or not a.get("nombre"):
+                continue
+            desde = vj.ciudad_de(ant["torneo"])
+            if not desde:
+                sin.add(ant["torneo"] or "?")
+                continue
+            if desde["nombre"] == hasta["nombre"]:
+                continue
+            dias = (fecha_p - (portada._dt(ant["fecha_estimada"]) or fecha_p)).total_seconds() / 86400
+            v = vj.entre(desde, hasta)
+            if dias > dias_max or (v["km"] < km_min and abs(v["huso"]) < huso_min):
+                continue
+            huso = f"{v['huso']:+g} h de huso" if v["huso"] else "sin cambio de huso"
+            f = {"clave": f"via:{p['id']}:{yo}", "ocurrio_en": _iso(fecha_p - timedelta(days=dias)), "publicado_en": _iso(ahora),
+                 "etiqueta": "VIAJES",
+                 "titulo": f"{a['nombre']} viene de {desde['nombre']} a {hasta['nombre']}: ≈ {v['km']:,} km, ~{v['horas']:g} h de viaje".replace(",", "."),
+                 "texto": f"Jugó por última vez hace {max(0, int(round(dias)))} día(s) en {desde['nombre']}. {huso.capitalize()}"
+                          f"{'; cambia de continente' if v['continente_cambia'] else ''}. Ahora: {p.get('torneo') or ''}"
+                          f"{' · ' + p['ronda'] if p.get('ronda') else ''}" + (f", contra {b['nombre']}" if b.get("nombre") else "")
+                          + ". (Horas estimadas puerta a puerta; no es su vuelo real.)",
+                 "jugador_id": yo, "jugador": a["nombre"], "torneo": p.get("torneo"),
+                 "circuito": portada.CIRCUITO_ES.get((p.get("circuito") or "").lower()) or None, "nivel": "CONFIRMADO",
+                 "origen": "CALCULADO", "fuente": "FullTennis", "ref_id": p["id"]}
+            out[_poner(conn, f)] += 1
+    conn.commit()
+    if sin:
+        out["sin_ciudad"] = sorted(sin)[:20]
+    return out
+
+
 def sincronizar(conn, cfg, ahora: Optional[datetime] = None) -> dict:
     """Paso del worker: eventos → pistas (si se permite) → calculados. Cada parte aislada de las demás."""
     ahora = ahora or datetime.now(timezone.utc)
@@ -214,7 +277,7 @@ def sincronizar(conn, cfg, ahora: Optional[datetime] = None) -> dict:
     if not int(cfg.get("NEWS_LIVE_ACTIVO", 1) or 0):
         return {"activo": 0}
     res = {}
-    for nombre, fn in (("eventos", desde_eventos), ("pistas", desde_pistas), ("calculados", calculados)):
+    for nombre, fn in (("eventos", desde_eventos), ("pistas", desde_pistas), ("calculados", calculados), ("viajes", viajes)):
         try:
             res[nombre] = fn(conn, cfg, ahora)
         except Exception as e:                     # una parte no tumba a las otras

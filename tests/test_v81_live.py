@@ -128,3 +128,44 @@ def test_comparar_externo():
     live = [{"jugador": "Daniil Medvedev", "ocurrio_en": "2026-11-04T10:05:00+00:00", "publicado_en": "2026-11-04T10:20:00+00:00"}]
     r = ce.comparar(ref, live)
     assert r["MOLESTIAS"]["cubiertas"] == 1 and r["MOLESTIAS"]["total"] == 2 and r["MOLESTIAS"]["mediana_min"] == 20
+
+
+def test_viajes_ciudad_a_ciudad_y_etiquetas_nuevas(conn, cfg):
+    a = jg.upsert(conn, "Daniil Medvedev", "M")
+    b = jg.upsert(conn, "Rival Uno", "M")
+    for torneo, horas in (("ATP Challenger Villa Maria - R2", -70), ("ATP Paris - R1", 6)):
+        conn.execute("INSERT INTO news_partido (torneo, fecha_estimada, jugador1_id, jugador2_id, estado, creado_en, actualizado_en) "
+                     "VALUES (?,?,?,?,?,?,?)", (torneo, (AHORA + timedelta(hours=horas)).isoformat(), a, b,
+                                                "JUGADO" if horas < 0 else "PROGRAMADO", AHORA.isoformat(), AHORA.isoformat()))
+    conn.commit()
+    r = live.sincronizar(conn, _cfg(cfg), AHORA)
+    assert r["viajes"]["nuevo"] == 2, r
+    it = [i for i in live.listar(conn, etiqueta="VIAJES")["items"] if i["jugador"] == "Daniil Medvedev"][0]
+    assert "Villa Maria" in it["titulo"] and "Paris" in it["titulo"] and "11.120" in it["titulo"] and "+4 h de huso" in it["texto"]
+    assert "cambia de continente" in it["texto"] and "no es su vuelo real" in it["texto"]
+    assert live.sincronizar(conn, _cfg(cfg), AHORA)["viajes"]["nuevo"] == 0
+
+
+def test_viajes_ciudad_desconocida_no_inventa(conn, cfg):
+    a = jg.upsert(conn, "Daniil Medvedev", "M")
+    b = jg.upsert(conn, "Rival Uno", "M")
+    for torneo, horas in (("ITF Men Xyzburgo - R1", -50), ("ATP Paris - R1", 6)):
+        conn.execute("INSERT INTO news_partido (torneo, fecha_estimada, jugador1_id, jugador2_id, estado, creado_en, actualizado_en) VALUES (?,?,?,?,?,?,?)",
+                     (torneo, (AHORA + timedelta(hours=horas)).isoformat(), a, b, "PROGRAMADO", AHORA.isoformat(), AHORA.isoformat()))
+    conn.commit()
+    r = live.sincronizar(conn, _cfg(cfg), AHORA)["viajes"]
+    assert r["nuevo"] == 0 and any("Xyzburgo" in t for t in r["sin_ciudad"])
+
+
+def test_carga_se_llama_desgaste(conn, cfg):
+    a = jg.upsert(conn, "Daniil Medvedev", "M")
+    _evento(conn, a, cat="CARGA_FISICA", resumen="5 partidos y 13 sets en 7 días; carga considerable")
+    live.sincronizar(conn, _cfg(cfg), AHORA)
+    assert live.listar(conn)["items"][0]["etiqueta"] == "DESGASTE"
+
+
+def test_ciudades_conocidas():
+    from ft_news import viajes as vj
+    assert vj.ciudad_de("WTA 125k Cali - R1")["nombre"] == "Cali" and vj.ciudad_de("Copa Davis") is None
+    d = vj.entre(vj.ciudad_de("Cali"), vj.ciudad_de("Bogota"))
+    assert 250 < d["km"] < 400 and d["huso"] == 0 and not d["continente_cambia"]
