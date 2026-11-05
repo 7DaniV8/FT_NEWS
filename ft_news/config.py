@@ -135,6 +135,8 @@ PARAMETROS = (
     ("NEWS_LIVE_PISTAS", 0, "bool",
      "1 = el LIVE también enseña pistas de Telegram aún NO confirmadas, siempre rotuladas SIN_CONFIRMAR. 0 (recomendado hasta que "
      "Rubén lo decida) = solo lo confirmado."),
+    ("NEWS_LIVE_TENNISALERTA", 1, "bool", "1 = el LIVE publica los avisos de TennisAlerta (todas las etiquetas, con su texto) siempre con «TennisAlerta» como fuente (autorizado por escrito el 04/11/2026). 0 = no se publica nada de ellos."),
+    ("NEWS_TENNISALERTA_URL", "", "str", "Enlace a la página de TennisAlerta que se muestra junto a su fuente (opcional)."),
     ("NEWS_LIVE_CALCULADOS", 1, "bool", "1 = el LIVE añade avisos calculados (jugador con noticia física reciente que juega pronto)."),
     ("NEWS_LIVE_DIAS", 3, "int", "Días hacia atrás que cubre el LIVE."),
     ("NEWS_LIVE_VIAJES", 1, "bool", "1 = el LIVE añade avisos de viaje ciudad a ciudad (distancia, horas estimadas y cambio de huso) para quien juega pronto."),

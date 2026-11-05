@@ -11,6 +11,7 @@ SEGUIMIENTO), jugador, torneo y si está CONFIRMADO o SIN_CONFIRMAR. Se alimenta
 
 Nada se copia de otra web. Es solo lectura sobre nuestras propias tablas más su propia tabla `news_live` (idempotente por `clave`).
 Un fallo aquí nunca tumba el resto del ciclo (va como un paso más del worker)."""
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -19,7 +20,7 @@ from ft_news import portada
 
 ETIQUETAS = ("ENTRY LIST", "INFORMACIÓN", "DECLARACIONES", "MOLESTIAS", "LESIÓN", "DESGASTE", "VIAJES", "SEGUIMIENTO")
 ESTADOS = ("PUBLICADO", "BORRADOR", "OCULTO")
-ORIGENES = ("EVENTO", "PISTA", "CALCULADO", "MANUAL")
+ORIGENES = ("EVENTO", "PISTA", "CALCULADO", "MANUAL", "TENNISALERTA")
 MAX_LISTA = 200
 VENTANA_CALCULADO_H = 30          # partidos de las próximas horas
 
@@ -158,6 +159,42 @@ def desde_pistas(conn, cfg, ahora: datetime) -> dict:
              "nivel": "CONFIRMADO" if p["estado"] == "CONFIRMADA" else "SIN_CONFIRMAR", "origen": "PISTA", "fuente": "Canal de Telegram",
              "ref_id": p["id"], "estado": "OCULTO" if p["estado"] == "SIN_CONFIRMAR" and fecha < ahora - timedelta(
                  hours=int(cfg.get("NEWS_TELEGRAM_CONFIRMAR_H", 72) or 72)) else "PUBLICADO"}
+        out[_poner(conn, f)] += 1
+    conn.commit()
+    return out
+
+
+ETIQUETA_EXTERNA = {"MOLESTIAS": "MOLESTIAS", "LESION": "LESIÓN", "LESIÓN": "LESIÓN", "DECLARACIONES": "DECLARACIONES",
+                    "INFORMACION": "INFORMACIÓN", "INFORMACIÓN": "INFORMACIÓN", "ENTRY LIST": "ENTRY LIST", "MTO": "MOLESTIAS"}
+
+
+def externo(conn, cfg, items: list, ahora: Optional[datetime] = None) -> dict:
+    """Avisos de TennisAlerta, publicados en el LIVE con su fuente. Autorizado por escrito por TennisAlerta el 04/11/2026
+    (2.ª carta): se pueden publicar en las páginas, canales y comunidad de FullTenis siempre reconociéndolos como fuente y
+    respetando el contexto original. Solo texto (las imágenes no se copian). Con NEWS_LIVE_TENNISALERTA=0 no se publica nada."""
+    asegurar(conn)
+    ahora = ahora or datetime.now(timezone.utc)
+    if not int(cfg.get("NEWS_LIVE_TENNISALERTA", 1) or 0):
+        return {"activo": 0}
+    from ft_news import jugadores as jg
+    enlace = str(cfg.get("NEWS_TENNISALERTA_URL", "") or "").strip() or "https://tennisalerta.com/"
+    out = {"nuevo": 0, "actualizado": 0, "igual": 0, "descartado": 0}
+    for it in (items or [])[:200]:
+        clave, jugador = str(it.get("clave") or "").strip(), str(it.get("jugador") or "").strip()
+        if not clave or not jugador:
+            out["descartado"] += 1
+            continue
+        et = ETIQUETA_EXTERNA.get(str(it.get("etiqueta") or "").strip().upper(), "INFORMACIÓN")
+        fecha = portada._dt(it.get("ocurrio_en")) or ahora
+        try:
+            j = jg.buscar_por_nombre(conn, jugador) or {}
+        except Exception:                                      # noqa: BLE001
+            j = {}
+        texto = str(it.get("texto") or "").strip()[:1500] or None
+        f = {"clave": f"ta:{clave}"[:120], "ocurrio_en": _iso(fecha), "publicado_en": _iso(ahora), "etiqueta": et,
+             "titulo": (j.get("nombre") or jugador)[:300], "texto": texto, "jugador_id": j.get("id"),
+             "jugador": j.get("nombre") or jugador, "torneo": j.get("ultimo_torneo"), "circuito": None, "nivel": "CONFIRMADO",
+             "origen": "TENNISALERTA", "fuente": "TennisAlerta", "enlace": enlace, "estado": "PUBLICADO"}
         out[_poner(conn, f)] += 1
     conn.commit()
     return out

@@ -395,6 +395,13 @@ def live_get(limite: int = 60, etiqueta: str = "", sin_confirmar: int = 1, desde
     return live.listar(conn, limite, etiqueta or None, bool(sin_confirmar), desde_id, bool(borradores))
 
 
+@app.post("/news/live/externo", dependencies=[Depends(_auth)])
+def live_externo(datos: dict, conn=Depends(_conn)):
+    """v8.3: avisos de TennisAlerta para publicar en el LIVE con su fuente (autorizado por escrito el 04/11/2026)."""
+    from ft_news import live
+    return live.externo(conn, config.leer_config(conn), datos.get("items") or [])
+
+
 @app.post("/news/live/manual", dependencies=[Depends(_auth)])
 def live_manual(datos: dict, conn=Depends(_conn)):
     """v8.1: mesa de redacción — una entrada escrita a mano (PUBLICADO o BORRADOR)."""

@@ -54,7 +54,7 @@ def test_ritmo_minimo_de_5_minutos():
         assert ts.espera_seg(1) >= 5 * 60 * 0.85 - 1
 
 
-def test_la_pista_de_tennisalerta_nunca_llega_al_LIVE(conn, cfg):
+def test_la_pista_de_tennisalerta_por_Telegram_no_sale_sola_al_LIVE(conn, cfg):
     a = jg.upsert(conn, "Daniil Medvedev", "M")
     conn.executescript(tg._TABLA)
     for canal, cid in (("TennisAlerta (señal interna)", "tennisalerta"), ("ALL News", "-100")):
@@ -65,4 +65,48 @@ def test_la_pista_de_tennisalerta_nunca_llega_al_LIVE(conn, cfg):
     c = dict(cfg, NEWS_LIVE_ACTIVO=1, NEWS_LIVE_PISTAS=1, NEWS_LIVE_CALCULADOS=1, NEWS_LIVE_DIAS=3)
     live.sincronizar(conn, c, AHORA)
     filas = live.listar(conn)["items"]
-    assert len(filas) == 1 and filas[0]["origen"] == "PISTA"
+    assert len(filas) == 1 and filas[0]["origen"] == "PISTA"          # la señal interna sigue sin publicarse por ese camino
+
+
+DETALLES = {"url": "https://x.supabase.co/rest/v1/news_details?select=news_id%2Cdetail", "json": [
+    {"news_id": "a1", "detail": "Cardozo pidió el médico en el segundo set."}]}
+
+
+def test_publicar_en_el_LIVE_con_su_texto_y_su_fuente(conn, cfg):
+    jg.upsert(conn, "Joaquin Aguilar Cardozo", "M")
+    its = ts.extraer(RESP + [DETALLES])
+    assert its[0]["texto"] == "Cardozo pidió el médico en el segundo set." and its[1]["texto"] == ""
+    live.asegurar(conn)
+    r = live.externo(conn, dict(cfg, NEWS_LIVE_TENNISALERTA=1), [ts.a_live(i) for i in its], AHORA)
+    assert r["nuevo"] == 4
+    filas = {f["titulo"]: f for f in live.listar(conn)["items"]}
+    ca = filas["Cardozo"]
+    assert ca["origen"] == "TENNISALERTA" and ca["fuente"] == "TennisAlerta" and ca["etiqueta"] == "MOLESTIAS"
+    assert ca["texto"] == "Cardozo pidió el médico en el segundo set." and ca["enlace"].startswith("https://tennisalerta.com")
+    assert {f["etiqueta"] for f in filas.values()} == {"MOLESTIAS", "ENTRY LIST", "LESIÓN"}   # el MTO también entra como MOLESTIAS
+    assert live.externo(conn, cfg, [ts.a_live(i) for i in its], AHORA)["igual"] == 4         # no duplica
+    assert live.externo(conn, dict(cfg, NEWS_LIVE_TENNISALERTA=0), [ts.a_live(i) for i in its], AHORA) == {"activo": 0}
+
+
+def test_publicar_recuerda_lo_enviado_y_reintenta_si_falla(tmp_path):
+    its = ts.extraer(RESP)
+    mem = ts.Memoria(tmp_path / "m.json")
+    assert ts.publicar(its, mem, lambda l: False)["live_fallo"] == 4
+    enviados = []
+    assert ts.publicar(its, mem, lambda l: enviados.append(l) or True)["live_enviados"] == 4
+    assert ts.publicar(its, ts.Memoria(tmp_path / "m.json"), lambda l: True)["live_nuevos"] == 0
+
+
+def test_endpoint_externo_publica_y_lo_devuelve_el_LIVE(conn, monkeypatch):
+    from fastapi.testclient import TestClient
+    from ft_news import config
+    from ft_news.app import app
+    monkeypatch.setattr(config, "NEWS_SECRET", "secreto-pruebas")
+    monkeypatch.setattr("ft_news.config.DB_PATH", Path(conn.execute("PRAGMA database_list").fetchone()[2]))
+    with TestClient(app) as t:
+        h = {"X-FT-News-Secret": "secreto-pruebas"}
+        assert t.post("/news/live/externo", json={"items": []}).status_code in (401, 403)
+        r = t.post("/news/live/externo", headers=h, json={"items": [ts.a_live(i) for i in ts.extraer(RESP + [DETALLES])]})
+        assert r.status_code == 200 and r.json()["nuevo"] == 4
+        its = t.get("/news/live", headers=h).json()["items"]
+        assert len(its) == 4 and all(i["fuente"] == "TennisAlerta" for i in its)

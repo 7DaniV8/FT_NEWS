@@ -1,6 +1,9 @@
 """📡 Señal interna desde TennisAlerta → FT NEWS.   (v8.2, 04/11/2026)
 
-AUTORIZACIÓN (TennisAlerta, por escrito, 04/11/2026): usar sus mensajes SOLO como señal interna para saber a qué jugador o partido
+AUTORIZACIÓN ACTUALIZADA (TennisAlerta, por escrito, 04/11/2026, 2.ª carta): pueden consultarse con acceso moderado, usarse internamente
+y PUBLICARSE en las páginas, canales y comunidad de FullTenis siempre reconociéndolos como fuente y respetando el contexto original.
+FT NEWS los publica en el LIVE con fuente «TennisAlerta» (ft_news/live.py → desde_tennisalerta). Las imágenes no se mencionan: no se copian.
+(Texto de la 1.ª carta, ya superado:) usar sus mensajes SOLO como señal interna para saber a qué jugador o partido
 mirar, y verificarlo con fuentes propias. Consultas moderadas, acceso habitual a la página con una cuenta autorizada, SIN compartir
 credenciales. NO se republican sus textos, mensajes ni imágenes (cualquier difusión futura necesita su aprobación y reconocerlos).
 
@@ -54,6 +57,12 @@ def msg_id_de(clave: str) -> int:
 def extraer(respuestas: list[dict]) -> list[dict]:
     """respuestas: [{'url':..., 'json': <lo que devolvió>}] de lo que la PROPIA página cargó. Devuelve novedades normalizadas."""
     out, vistos = [], set()
+    detalles = {}                                  # texto de cada aviso (la página lo pide aparte: news_details)
+    for r in respuestas:
+        if "news_details" in r.get("url", "") and isinstance(r.get("json"), list):
+            for d in r["json"]:
+                if isinstance(d, dict) and d.get("news_id") and d.get("detail"):
+                    detalles[str(d["news_id"])] = str(d["detail"])
     for r in respuestas:
         url, datos = r.get("url", ""), r.get("json")
         if not isinstance(datos, list):
@@ -63,11 +72,11 @@ def extraer(respuestas: list[dict]) -> list[dict]:
                 continue
             if "news_items" in url and d.get("id") and d.get("title") is not None:
                 it = {"clave": "ni:" + str(d["id"]), "tipo": "NOVEDAD", "etiqueta": str(d.get("tag") or ""), "jugador": str(d.get("title") or "").strip(),
-                      "ocurrio_en": d.get("occurred_at") or d.get("created_at"), "detalle": ""}
+                      "ocurrio_en": d.get("occurred_at") or d.get("created_at"), "detalle": "", "texto": detalles.get(str(d["id"]), "")}
             elif "public_mto_events" in url and d.get("id") and d.get("player_name"):
                 it = {"clave": "mto:" + str(d["id"]), "tipo": "MTO", "etiqueta": "MTO", "jugador": str(d["player_name"]).strip(),
                       "ocurrio_en": d.get("occurred_at"),
-                      "detalle": f"Medical timeout vs {d.get('opponent_name') or '?'} ({d.get('tournament') or ''}) {d.get('score') or ''}".strip()}
+                      "detalle": f"Medical timeout vs {d.get('opponent_name') or '?'} ({d.get('tournament') or ''}) {d.get('score') or ''}".strip(), "texto": ""}
             else:
                 continue
             if it["jugador"] and it["clave"] not in vistos:
@@ -81,6 +90,32 @@ def a_pista(it: dict) -> dict:
     texto = f"{it['jugador']}\n" + (it["detalle"] or f"{it['etiqueta']}: molestia / lesión / baja (señal interna)")
     return {"texto": texto, "canal_id": CHAT_ID, "canal": CANAL, "chat_id": CHAT_ID, "msg_id": msg_id_de(it["clave"]),
             "modo": "lesiones", "fecha": it.get("ocurrio_en")}
+
+
+def a_live(it: dict) -> dict:
+    """El aviso tal como TennisAlerta lo muestra (jugador, etiqueta y su texto), para publicarlo en el LIVE con su fuente."""
+    return {"clave": it["clave"], "etiqueta": it["etiqueta"], "jugador": it["jugador"],
+            "texto": (it.get("texto") or it.get("detalle") or "").strip(), "ocurrio_en": it.get("ocurrio_en")}
+
+
+def publicar(items: list[dict], mem, enviar_live, lote: int = 40) -> dict:
+    """Envía al LIVE de FT NEWS lo que aún no se publicó (todas las etiquetas). enviar_live(lista) -> bool."""
+    vistos = mem.d.setdefault("live", {})
+    pend = [it for it in items if it["clave"] not in vistos]
+    res = {"live_nuevos": len(pend), "live_enviados": 0, "live_fallo": 0}
+    for i in range(0, len(pend), lote):
+        trozo = pend[i:i + lote]
+        if enviar_live([a_live(x) for x in trozo]):
+            for x in trozo:
+                vistos[x["clave"]] = datetime.now(timezone.utc).isoformat()
+            res["live_enviados"] += len(trozo)
+        else:
+            res["live_fallo"] += len(trozo)
+    if len(vistos) > 5000:
+        for k in sorted(vistos, key=vistos.get)[:1000]:
+            vistos.pop(k, None)
+    mem.guardar()
+    return res
 
 
 class Memoria:
@@ -165,12 +200,25 @@ def enviar_a_ft_news(base: str, secreto: str):
     return _f
 
 
+def enviar_live_a_ft_news(base: str, secreto: str):
+    def _f(lista: list) -> bool:
+        req = urllib.request.Request(base.rstrip("/") + "/news/live/externo", data=json.dumps({"items": lista}).encode(),
+                                     headers={"Content-Type": "application/json", "X-FT-News-Secret": secreto}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return 200 <= r.status < 300
+        except Exception as e:  # noqa: BLE001
+            print("  no se pudo publicar en el LIVE de FT NEWS:", e)
+            return False
+    return _f
+
+
 def espera_seg(cada_min: float) -> float:
     cada = max(MIN_CADA_MIN, float(cada_min))
     return cada * 60 * random.uniform(0.85, 1.25)
 
 
-def _una_vuelta(pw_ctx, url: str):
+def _una_vuelta(pw_ctx, url: str, diagnostico: bool = False):
     """Abre la página una vez y devuelve (items, motivo_de_parada)."""
     pagina = pw_ctx.new_page()
     capturas, parada = [], []
@@ -180,12 +228,22 @@ def _una_vuelta(pw_ctx, url: str):
             if r.status in (401, 403, 429):
                 parada.append(f"HTTP {r.status} en {r.url[:80]}")
             u = r.url
-            if ("news_items" in u or "public_mto_events" in u) and r.status == 200:
+            if diagnostico and "json" in (r.headers.get("content-type") or "").lower():
+                try:
+                    cuerpo_j = r.json()
+                    forma = f"lista de {len(cuerpo_j)}" if isinstance(cuerpo_j, list) else "objeto"
+                    claves = sorted(cuerpo_j[0].keys())[:8] if isinstance(cuerpo_j, list) and cuerpo_j and isinstance(cuerpo_j[0], dict) else (sorted(cuerpo_j.keys())[:8] if isinstance(cuerpo_j, dict) else "")
+                except Exception:  # noqa: BLE001
+                    forma, claves = "?", ""
+                print("  [json]", r.status, u[:110], "|", forma, claves)
+            if ("news_items" in u or "public_mto_events" in u or "news_details" in u) and r.status == 200:
                 capturas.append({"url": u, "json": r.json()})
         except Exception:  # noqa: BLE001
             pass
     pagina.on("response", _resp)
     pagina.goto(url, wait_until="networkidle", timeout=60000)
+    if diagnostico:
+        print("  [página]", pagina.url, "|", (pagina.title() or "")[:80])
     pagina.wait_for_timeout(4000)
     cuerpo = (pagina.inner_text("body") or "").lower()
     if any(x in cuerpo for x in ("iniciar sesión", "inicia sesión", "log in", "captcha", "verify you are human")) and not capturas:
@@ -202,6 +260,7 @@ def main(argv=None) -> int:
     ap.add_argument("--max-dia", type=int, default=MAX_DIA_DEFECTO)
     ap.add_argument("--login", action="store_true", help="abre el navegador para que inicies sesión a mano")
     ap.add_argument("--una-vez", action="store_true")
+    ap.add_argument("--diagnostico", action="store_true", help="solo muestra qué rutas JSON carga la página (sin enviar nada)")
     ap.add_argument("--seco", action="store_true", help="no envía nada a FT NEWS, solo muestra")
     a = ap.parse_args(argv)
     if not a.url:
@@ -219,6 +278,7 @@ def main(argv=None) -> int:
     perfil = Path(a.perfil)
     perfil.mkdir(parents=True, exist_ok=True)
     mem = Memoria(perfil / "estado.json")
+    enviar_live = (lambda l: (print(f"  [seco] LIVE x{len(l)}:", " / ".join(f"{x['etiqueta']}·{x['jugador']}" for x in l[:6]), "…") or True)) if a.seco else enviar_live_a_ft_news(base, sec)
     enviar = (lambda c: (print("  [seco]", c["texto"].replace("\n", " | ")) or True)) if a.seco else enviar_a_ft_news(base, sec)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(str(perfil / "navegador"), headless=not a.login)
@@ -229,11 +289,12 @@ def main(argv=None) -> int:
                 input("Inicia sesión en la ventana. Cuando veas el LIVE, vuelve aquí y pulsa Enter para guardar la sesión…")
                 return 0
             while True:
-                items, parada = _una_vuelta(ctx, a.url)
+                items, parada = _una_vuelta(ctx, a.url, a.diagnostico)
                 if parada:
                     print("DETENIDO:", parada, "— no se insiste. Revisa la sesión (--login) o espera.")
                     return 3
                 r = procesar(items, mem, enviar, perfil / "capturas.csv", a.max_dia)
+                r.update(publicar(items, mem, enviar_live))
                 print(datetime.now().strftime("%H:%M"), r)
                 if a.una_vez:
                     return 0
